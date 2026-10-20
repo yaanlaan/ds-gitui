@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-plugin-git-graph
+      name: dsh-plugin-git-graph

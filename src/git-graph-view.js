@@ -1,0 +1,868 @@
+/**
+ * DeepSeek Harness Git Graph Plugin - React View Component
+ * Uses React.createElement (h) for zero-dependency native execution in Cordis/Electron/Browser
+ */
+
+const COLORS = [
+  '#3b82f6', // blue
+  '#10b981', // green
+  '#f59e0b', // amber
+  '#ec4899', // pink
+  '#8b5cf6', // purple
+  '#06b6d4', // cyan
+  '#f97316', // orange
+  '#a855f7'  // violet
+];
+
+function formatRelativeDate(isoStr) {
+  if (!isoStr) return '';
+  const date = new Date(isoStr);
+  const now = new Date();
+  const diffSec = Math.floor((now.getTime() - date.getTime()) / 1000);
+  if (diffSec < 60) return '刚刚';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 小时前`;
+  if (diffSec < 86400 * 30) return `${Math.floor(diffSec / 86400)} 天前`;
+  return date.toLocaleDateString();
+}
+
+function computeGraphLayout(commits) {
+  const lanes = [];
+  const rows = [];
+  const commitIndices = new Map();
+
+  commits.forEach((c, idx) => {
+    commitIndices.set(c.hash, idx);
+  });
+
+  for (let i = 0; i < commits.length; i++) {
+    const commit = commits[i];
+    let lane = lanes.indexOf(commit.hash);
+
+    if (lane === -1) {
+      const emptyIdx = lanes.indexOf(null);
+      lane = emptyIdx !== -1 ? emptyIdx : lanes.length;
+    }
+
+    lanes[lane] = null;
+    const passingLanesBefore = lanes.map((h, lIdx) => (h ? lIdx : null)).filter(x => x !== null);
+
+    const parentConnections = [];
+    if (commit.parents && commit.parents.length > 0) {
+      commit.parents.forEach((parentHash, pIdx) => {
+        let parentLane = lanes.indexOf(parentHash);
+        if (parentLane === -1) {
+          if (pIdx === 0 && lanes[lane] === null) {
+            lanes[lane] = parentHash;
+            parentLane = lane;
+          } else {
+            const emptyIdx = lanes.indexOf(null);
+            if (emptyIdx !== -1) {
+              lanes[emptyIdx] = parentHash;
+              parentLane = emptyIdx;
+            } else {
+              parentLane = lanes.length;
+              lanes.push(parentHash);
+            }
+          }
+        }
+        parentConnections.push({
+          parentHash,
+          parentLane,
+          isFirst: pIdx === 0
+        });
+      });
+    }
+
+    rows.push({
+      commit,
+      lane,
+      color: COLORS[lane % COLORS.length],
+      parentConnections,
+      passingLanesBefore
+    });
+  }
+
+  const maxLane = Math.max(0, ...rows.map(r => r.lane), ...rows.flatMap(r => r.parentConnections.map(p => p.parentLane)));
+  return { rows, maxLane };
+}
+
+export function createGitGraphComponent(React) {
+  const h = React.createElement;
+  const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+  return function GitGraphView(props) {
+    const [repoOverview, setRepoOverview] = useState(null);
+    const [commits, setCommits] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [selectedBranch, setSelectedBranch] = useState('ALL');
+    const [searchQuery, setSearchQuery] = useState('');
+
+    const [selectedCommit, setSelectedCommit] = useState(null);
+    const [commitDetails, setCommitDetails] = useState(null);
+    const [loadingDetails, setLoadingDetails] = useState(false);
+    const [selectedFile, setSelectedFile] = useState(null);
+    const [fileDiff, setFileDiff] = useState(null);
+    const [loadingDiff, setLoadingDiff] = useState(false);
+
+    const [commitMessage, setCommitMessage] = useState('');
+    const [committing, setCommitting] = useState(false);
+    const [contextMenu, setContextMenu] = useState(null);
+    const [modal, setModal] = useState(null);
+    const [modalInput, setModalInput] = useState('');
+    const [modalExtra, setModalExtra] = useState('');
+    const [toast, setToast] = useState(null);
+
+    const showToast = useCallback((msg, duration = 3000) => {
+      setToast(msg);
+      setTimeout(() => setToast(null), duration);
+    }, []);
+
+    const loadRepoData = useCallback(async (branch = selectedBranch) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const overviewRes = await fetch('/api/git-graph/overview');
+        const overviewJson = await overviewRes.json();
+        if (!overviewJson.success || !overviewJson.data?.isRepo) {
+          setError('当前工作区不是一个 Git 仓库 (Not a Git repository)');
+          setLoading(false);
+          return;
+        }
+        setRepoOverview(overviewJson.data);
+
+        const logRes = await fetch(`/api/git-graph/log?branch=${encodeURIComponent(branch)}&maxCount=250`);
+        const logJson = await logRes.json();
+        if (logJson.success) {
+          setCommits(logJson.commits || []);
+        } else {
+          setError(logJson.error || '获取 Git 提交记录失败');
+        }
+      } catch (err) {
+        setError('无法连接到 Git 服务端: ' + err.message);
+      } finally {
+        setLoading(false);
+      }
+    }, [selectedBranch]);
+
+    useEffect(() => {
+      loadRepoData();
+    }, [loadRepoData]);
+
+    const handleSelectCommit = useCallback(async (commit) => {
+      setSelectedCommit(commit);
+      setSelectedFile(null);
+      setFileDiff(null);
+      setLoadingDetails(true);
+      try {
+        const res = await fetch(`/api/git-graph/commit-details?hash=${encodeURIComponent(commit.hash)}`);
+        const json = await res.json();
+        if (json.success && json.details) {
+          setCommitDetails(json.details);
+          if (json.details.files?.length > 0) {
+            handleSelectFile(commit.hash, json.details.files[0].path);
+          }
+        }
+      } catch (err) {
+        showToast('获取提交详情失败: ' + err.message);
+      } finally {
+        setLoadingDetails(false);
+      }
+    }, [showToast]);
+
+    const handleSelectFile = useCallback(async (hash, filePath) => {
+      setSelectedFile(filePath);
+      setLoadingDiff(true);
+      try {
+        const res = await fetch(`/api/git-graph/diff?hash=${encodeURIComponent(hash)}&file=${encodeURIComponent(filePath)}`);
+        const json = await res.json();
+        if (json.success) {
+          setFileDiff(json.diff);
+        } else {
+          setFileDiff('无法加载 Diff: ' + (json.error || '未知错误'));
+        }
+      } catch (err) {
+        setFileDiff('加载 Diff 异常: ' + err.message);
+      } finally {
+        setLoadingDiff(false);
+      }
+    }, []);
+
+    const handleCheckout = async (target) => {
+      try {
+        const res = await fetch('/api/git-graph/checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target })
+        });
+        const json = await res.json();
+        if (json.success) {
+          showToast(`已成功检出至: ${target}`);
+          loadRepoData();
+        } else {
+          showToast('检出失败: ' + (json.error || '未知错误'));
+        }
+      } catch (e) {
+        showToast('操作失败: ' + e.message);
+      }
+    };
+
+    const handleCreateBranch = async () => {
+      if (!modalInput.trim()) return;
+      try {
+        const res = await fetch('/api/git-graph/create-branch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ branchName: modalInput.trim(), startPoint: modal.targetCommit })
+        });
+        const json = await res.json();
+        if (json.success) {
+          showToast(`分支 "${modalInput}" 创建成功`);
+          setModal(null);
+          loadRepoData();
+        } else {
+          showToast('创建分支失败: ' + json.error);
+        }
+      } catch (e) {
+        showToast('操作失败: ' + e.message);
+      }
+    };
+
+    const handleCreateTag = async () => {
+      if (!modalInput.trim()) return;
+      try {
+        const res = await fetch('/api/git-graph/create-tag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tagName: modalInput.trim(),
+            commitHash: modal.targetCommit,
+            message: modalExtra.trim()
+          })
+        });
+        const json = await res.json();
+        if (json.success) {
+          showToast(`标签 "${modalInput}" 创建成功`);
+          setModal(null);
+          loadRepoData();
+        } else {
+          showToast('创建标签失败: ' + json.error);
+        }
+      } catch (e) {
+        showToast('操作失败: ' + e.message);
+      }
+    };
+
+    const handleReset = async (mode) => {
+      try {
+        const res = await fetch('/api/git-graph/reset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hash: modal.targetCommit, mode })
+        });
+        const json = await res.json();
+        if (json.success) {
+          showToast(`已 Reset 到提交: ${modal.targetCommit.slice(0, 7)}`);
+          setModal(null);
+          loadRepoData();
+        } else {
+          showToast('Reset 失败: ' + json.error);
+        }
+      } catch (e) {
+        showToast('操作失败: ' + e.message);
+      }
+    };
+
+    const handleQuickCommit = async () => {
+      if (!commitMessage.trim()) return;
+      setCommitting(true);
+      try {
+        await fetch('/api/git-graph/stage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: ['.'] })
+        });
+        const res = await fetch('/api/git-graph/commit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: commitMessage.trim() })
+        });
+        const json = await res.json();
+        if (json.success) {
+          showToast('提交成功！');
+          setCommitMessage('');
+          loadRepoData();
+        } else {
+          showToast('提交失败: ' + json.error);
+        }
+      } catch (e) {
+        showToast('提交异常: ' + e.message);
+      } finally {
+        setCommitting(false);
+      }
+    };
+
+    const handleFetch = async () => {
+      showToast('正在从远程拉取分支与 Tag 信息 (Fetching)...');
+      try {
+        const res = await fetch('/api/git-graph/fetch', { method: 'POST' });
+        const json = await res.json();
+        if (json.success) {
+          showToast('Fetch 完成！');
+          loadRepoData();
+        } else {
+          showToast('Fetch 失败: ' + json.error);
+        }
+      } catch (e) {
+        showToast('Fetch 异常: ' + e.message);
+      }
+    };
+
+    const handlePull = async () => {
+      showToast('正在拉取并合并远程变更 (Pulling)...');
+      try {
+        const res = await fetch('/api/git-graph/pull', { method: 'POST' });
+        const json = await res.json();
+        if (json.success) {
+          showToast('Pull 完成！已是最新代码');
+          loadRepoData();
+        } else {
+          showToast('Pull 失败: ' + json.error);
+        }
+      } catch (e) {
+        showToast('Pull 异常: ' + e.message);
+      }
+    };
+
+    const handlePush = async () => {
+      showToast('正在推送到远程仓库 (Pushing)...');
+      try {
+        const res = await fetch('/api/git-graph/push', { method: 'POST' });
+        const json = await res.json();
+        if (json.success) {
+          showToast('Push 成功！');
+          loadRepoData();
+        } else {
+          showToast('Push 失败: ' + json.error);
+        }
+      } catch (e) {
+        showToast('Push 异常: ' + e.message);
+      }
+    };
+
+    const filteredCommits = useMemo(() => {
+      if (!searchQuery.trim()) return commits;
+      const q = searchQuery.toLowerCase();
+      return commits.filter(c =>
+        c.subject.toLowerCase().includes(q) ||
+        c.author.toLowerCase().includes(q) ||
+        c.hash.toLowerCase().includes(q) ||
+        c.refs.some(r => r.name.toLowerCase().includes(q))
+      );
+    }, [commits, searchQuery]);
+
+    const graphData = useMemo(() => computeGraphLayout(filteredCommits), [filteredCommits]);
+
+    const handleContextMenu = (e, commit) => {
+      e.preventDefault();
+      setContextMenu({
+        x: Math.min(e.clientX, window.innerWidth - 200),
+        y: Math.min(e.clientY, window.innerHeight - 250),
+        commit
+      });
+    };
+
+    useEffect(() => {
+      const closeMenu = () => setContextMenu(null);
+      window.addEventListener('click', closeMenu);
+      return () => window.removeEventListener('click', closeMenu);
+    }, []);
+
+    if (loading && !repoOverview) {
+      return h('div', { className: 'dsh-git-graph-container' },
+        h('div', { className: 'dsh-git-center-msg' },
+          h('div', { className: 'dsh-spinner' }),
+          h('span', null, '正在分析 Git 仓库图谱...')
+        )
+      );
+    }
+
+    if (error && !repoOverview) {
+      return h('div', { className: 'dsh-git-graph-container' },
+        h('div', { className: 'dsh-git-center-msg' },
+          h('svg', { width: 40, height: 40, viewBox: '0 0 24 24', fill: 'none', stroke: '#ef4444', strokeWidth: 2 },
+            h('circle', { cx: 12, cy: 12, r: 10 }),
+            h('line', { x1: 12, y1: 8, x2: 12, y2: 12 }),
+            h('line', { x1: 12, y1: 16, x2: 12.01, y2: 16 })
+          ),
+          h('div', { style: { fontWeight: 600, color: '#f87171' } }, error),
+          h('button', { className: 'dsh-git-btn dsh-git-btn-primary', onClick: () => loadRepoData() }, '重试检查')
+        )
+      );
+    }
+
+    const laneWidth = 16;
+    const svgWidth = Math.max(60, (graphData.maxLane + 1) * laneWidth + 16);
+
+    return h('div', { className: 'dsh-git-graph-container' },
+      // 1. Top Toolbar
+      h('div', { className: 'dsh-git-toolbar' },
+        h('div', { className: 'dsh-git-toolbar-group' },
+          h('select', {
+            className: 'dsh-git-select',
+            value: selectedBranch,
+            onChange: (e) => {
+              setSelectedBranch(e.target.value);
+              loadRepoData(e.target.value);
+            }
+          },
+            h('option', { value: 'ALL' }, '所有分支 (All Branches)'),
+            repoOverview?.branches?.map(b =>
+              h('option', { key: b.name, value: b.name }, b.isHead ? `* ${b.name}` : b.name)
+            )
+          ),
+          h('button', { className: 'dsh-git-btn', onClick: () => loadRepoData(), title: '刷新提交图谱' },
+            h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 },
+              h('path', { d: 'M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2' })
+            ),
+            '刷新'
+          ),
+          h('button', { className: 'dsh-git-btn', onClick: handleFetch, title: 'Fetch 远程仓库' },
+            h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 },
+              h('polyline', { points: '7 10 12 15 17 10' }),
+              h('line', { x1: 12, y1: 15, x2: 12, y2: 3 })
+            ),
+            'Fetch'
+          ),
+          h('button', { className: 'dsh-git-btn', onClick: handlePull, title: 'Pull 拉取并合并' },
+            h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 },
+              h('path', { d: 'M12 2v10M16 8l-4 4-4-4M3 15v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4' })
+            ),
+            'Pull'
+          ),
+          h('button', { className: 'dsh-git-btn', onClick: handlePush, title: 'Push 推送到远程' },
+            h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 },
+              h('path', { d: 'M12 14V2M8 6l4-4 4 4M3 15v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4' })
+            ),
+            'Push'
+          )
+        ),
+        h('div', { className: 'dsh-git-toolbar-group' },
+          h('span', { className: 'dsh-git-badge dsh-badge-head', title: '当前活动分支' },
+            `HEAD: ${repoOverview?.currentBranch || 'unknown'}`
+          )
+        ),
+        h('div', { className: 'dsh-git-search-box' },
+          h('input', {
+            type: 'text',
+            className: 'dsh-git-input',
+            style: { width: '100%' },
+            placeholder: '搜索提交、作者或 SHA...',
+            value: searchQuery,
+            onChange: (e) => setSearchQuery(e.target.value)
+          })
+        )
+      ),
+
+      // 2. Working Tree Changes Bar
+      repoOverview?.status?.dirty && h('div', { className: 'dsh-git-working-tree-bar' },
+        h('div', null,
+          h('span', { style: { fontWeight: 600, color: '#f59e0b', marginRight: 8 } }, '⚡ 未提交改动:'),
+          h('span', null,
+            repoOverview.status.stagedCount > 0 && `已暂存: ${repoOverview.status.stagedCount} `,
+            repoOverview.status.unstagedCount > 0 && `未暂存: ${repoOverview.status.unstagedCount} `,
+            repoOverview.status.untrackedCount > 0 && `未跟踪: ${repoOverview.status.untrackedCount}`
+          )
+        ),
+        h('div', { className: 'dsh-git-quick-commit' },
+          h('input', {
+            type: 'text',
+            className: 'dsh-git-input',
+            style: { flex: 1 },
+            placeholder: '输入提交信息进行一键提交...',
+            value: commitMessage,
+            onChange: (e) => setCommitMessage(e.target.value),
+            onKeyDown: (e) => e.key === 'Enter' && handleQuickCommit()
+          }),
+          h('button', {
+            className: 'dsh-git-btn dsh-git-btn-primary',
+            disabled: committing || !commitMessage.trim(),
+            onClick: handleQuickCommit
+          }, committing ? '提交中...' : '提交全部')
+        )
+      ),
+
+      // 3. Main Commit Table & Graph
+      h('div', { className: 'dsh-git-main-area' },
+        h('div', { className: 'dsh-git-table-container' },
+          graphData.rows.length === 0
+            ? h('div', { className: 'dsh-git-center-msg' }, '暂无匹配的 Git 提交记录')
+            : graphData.rows.map((row, idx) => {
+                const { commit, lane, color, parentConnections, passingLanesBefore } = row;
+                const isSelected = selectedCommit?.hash === commit.hash;
+                const dotX = lane * laneWidth + 10;
+                const dotY = 16;
+
+                return h('div', {
+                  key: commit.hash + idx,
+                  className: `dsh-git-commit-row ${isSelected ? 'selected' : ''} ${commit.isUncommitted ? 'uncommitted-row' : ''}`,
+                  onClick: () => handleSelectCommit(commit),
+                  onContextMenu: (e) => handleContextMenu(e, commit)
+                },
+                  // Visual SVG Subway Graph Cell
+                  h('div', { className: 'dsh-git-col-graph', style: { width: svgWidth } },
+                    h('svg', { width: svgWidth, height: 32, style: { display: 'block' } },
+                      passingLanesBefore.map(lIdx => {
+                        if (lIdx === lane) return null;
+                        const px = lIdx * laneWidth + 10;
+                        const pColor = COLORS[lIdx % COLORS.length];
+                        return h('line', {
+                          key: `pass-${lIdx}`,
+                          x1: px,
+                          y1: 0,
+                          x2: px,
+                          y2: 32,
+                          stroke: pColor,
+                          strokeWidth: 2,
+                          strokeOpacity: 0.75
+                        });
+                      }),
+                      parentConnections.map((pc, pIdx) => {
+                        const targetX = pc.parentLane * laneWidth + 10;
+                        const targetY = 32;
+                        const pColor = COLORS[pc.parentLane % COLORS.length];
+                        if (pc.parentLane === lane) {
+                          return h('line', {
+                            key: `p-${pIdx}`,
+                            x1: dotX,
+                            y1: dotY,
+                            x2: dotX,
+                            y2: 32,
+                            stroke: color,
+                            strokeWidth: 2
+                          });
+                        }
+                        const d = `M ${dotX} ${dotY} C ${dotX} ${dotY + 10}, ${targetX} ${targetY - 10}, ${targetX} ${targetY}`;
+                        return h('path', {
+                          key: `p-${pIdx}`,
+                          d,
+                          fill: 'none',
+                          stroke: pc.isFirst ? color : pColor,
+                          strokeWidth: 2
+                        });
+                      }),
+                      commit.isUncommitted
+                        ? h('circle', {
+                            cx: dotX,
+                            cy: dotY,
+                            r: 5,
+                            fill: 'none',
+                            stroke: '#f59e0b',
+                            strokeWidth: 2,
+                            strokeDasharray: '2,2'
+                          })
+                        : [
+                            commit.isHead && h('circle', {
+                              key: 'head-ring',
+                              cx: dotX,
+                              cy: dotY,
+                              r: 8,
+                              fill: 'none',
+                              stroke: color,
+                              strokeWidth: 1.5,
+                              strokeOpacity: 0.5
+                            }),
+                            h('circle', {
+                              key: 'node-dot',
+                              cx: dotX,
+                              cy: dotY,
+                              r: commit.isHead ? 5 : 4,
+                              fill: color,
+                              stroke: '#181920',
+                              strokeWidth: 2
+                            })
+                          ]
+                    )
+                  ),
+
+                  // Commit Description & Badges
+                  h('div', { className: 'dsh-git-col-desc' },
+                    commit.refs.map((ref, rIdx) => {
+                      if (ref.type === 'head') {
+                        return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-head' }, 'HEAD');
+                      }
+                      if (ref.type === 'branch') {
+                        return h('span', {
+                          key: rIdx,
+                          className: 'dsh-git-badge dsh-badge-branch',
+                          title: `双击检出分支 ${ref.name}`,
+                          onDoubleClick: (e) => {
+                            e.stopPropagation();
+                            handleCheckout(ref.name);
+                          }
+                        },
+                          h('svg', { width: 10, height: 10, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.5 },
+                            h('line', { x1: 6, y1: 3, x2: 6, y2: 15 }),
+                            h('circle', { cx: 18, cy: 6, r: 3 }),
+                            h('circle', { cx: 6, cy: 18, r: 3 }),
+                            h('path', { d: 'M18 9a9 9 0 0 1-9 9' })
+                          ),
+                          ref.name
+                        );
+                      }
+                      if (ref.type === 'remote') {
+                        return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-remote' }, ref.name);
+                      }
+                      if (ref.type === 'tag') {
+                        return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-tag' }, `🏷️ ${ref.name}`);
+                      }
+                      if (ref.type === 'uncommitted') {
+                        return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-uncommitted' }, '* 工作区未提交');
+                      }
+                      return null;
+                    }),
+                    h('span', {
+                      style: {
+                        fontWeight: commit.isHead ? 600 : 400,
+                        color: commit.isUncommitted ? '#f59e0b' : 'inherit'
+                      }
+                    }, commit.subject)
+                  ),
+
+                  // Short Hash
+                  h('div', { className: 'dsh-git-col-hash' }, commit.shortHash),
+
+                  // Author
+                  h('div', { className: 'dsh-git-col-author' },
+                    h('span', { className: 'dsh-git-author-avatar' },
+                      commit.author ? commit.author.charAt(0).toUpperCase() : '?'
+                    ),
+                    h('span', null, commit.author)
+                  ),
+
+                  // Date
+                  h('div', { className: 'dsh-git-col-date' }, formatRelativeDate(commit.date))
+                );
+              })
+        ),
+
+        // 4. Commit Details & File Diff Drawer
+        selectedCommit && h('div', { className: 'dsh-git-drawer' },
+          h('div', { className: 'dsh-git-drawer-resizer' }),
+          h('div', { className: 'dsh-git-drawer-header' },
+            h('div', { style: { flex: 1, overflow: 'hidden' } },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 } },
+                h('span', { style: { fontWeight: 600, fontSize: 13, color: '#fff' } },
+                  commitDetails?.subject || selectedCommit.subject
+                ),
+                h('span', {
+                  className: 'dsh-git-col-hash',
+                  style: { background: 'rgba(255,255,255,0.08)', borderRadius: 4, padding: '2px 6px' }
+                }, selectedCommit.shortHash)
+              ),
+              h('div', { style: { fontSize: 11, color: '#94a3b8', display: 'flex', gap: 12 } },
+                h('span', null, `作者: ${commitDetails?.author || selectedCommit.author} <${commitDetails?.email || ''}>`),
+                h('span', null, `时间: ${commitDetails?.date || selectedCommit.date}`)
+              )
+            ),
+            h('button', {
+              className: 'dsh-git-btn',
+              style: { padding: '2px 8px' },
+              onClick: () => setSelectedCommit(null)
+            }, '✕ 关闭')
+          ),
+
+          h('div', { className: 'dsh-git-drawer-body' },
+            // File List
+            h('div', { className: 'dsh-git-file-list' },
+              h('div', {
+                style: { padding: '6px 10px', fontSize: 11, fontWeight: 600, color: '#94a3b8', borderBottom: '1px solid rgba(255,255,255,0.06)' }
+              }, `变更文件 (${commitDetails?.files?.length || 0})`),
+              loadingDetails
+                ? h('div', { style: { padding: 12, textAlign: 'center', color: '#94a3b8' } }, '正在加载文件列表...')
+                : commitDetails?.files?.map(file =>
+                    h('div', {
+                      key: file.path,
+                      className: `dsh-git-file-item ${selectedFile === file.path ? 'selected' : ''}`,
+                      onClick: () => handleSelectFile(selectedCommit.hash, file.path),
+                      title: file.path
+                    },
+                      h('div', { style: { display: 'flex', alignItems: 'center', overflow: 'hidden' } },
+                        h('span', { className: `dsh-file-status-tag dsh-status-${file.status.charAt(0).toUpperCase()}` },
+                          file.status.charAt(0).toUpperCase()
+                        ),
+                        h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, file.path)
+                      ),
+                      h('div', { style: { fontSize: 10, flexShrink: 0, marginLeft: 6 } },
+                        file.additions > 0 && h('span', { style: { color: '#10b981', marginRight: 4 } }, `+${file.additions}`),
+                        file.deletions > 0 && h('span', { style: { color: '#ef4444' } }, `-${file.deletions}`)
+                      )
+                    )
+                  )
+            ),
+
+            // Diff Viewer
+            h('div', { className: 'dsh-git-diff-viewer' },
+              loadingDiff
+                ? h('div', { style: { padding: 20, textAlign: 'center', color: '#94a3b8' } }, '正在生成代码差异...')
+                : !fileDiff
+                  ? h('div', { style: { padding: 20, textAlign: 'center', color: '#94a3b8' } }, '点击左侧文件查看代码改动差异')
+                  : fileDiff.split('\n').map((line, lIdx) => {
+                      let className = 'dsh-diff-line';
+                      if (line.startsWith('+') && !line.startsWith('+++')) className += ' dsh-diff-added';
+                      else if (line.startsWith('-') && !line.startsWith('---')) className += ' dsh-diff-removed';
+                      else if (line.startsWith('@@') || line.startsWith('diff --git')) className += ' dsh-diff-header';
+
+                      return h('div', { key: lIdx, className }, line || ' ');
+                    })
+            )
+          )
+        )
+      ),
+
+      // 5. Context Menu
+      contextMenu && h('div', {
+        className: 'dsh-git-context-menu',
+        style: { left: contextMenu.x, top: contextMenu.y },
+        onClick: (e) => e.stopPropagation()
+      },
+        h('div', {
+          className: 'dsh-git-menu-item',
+          onClick: () => {
+            handleCheckout(contextMenu.commit.hash);
+            setContextMenu(null);
+          }
+        }, '检出此提交 (Checkout Commit)'),
+        h('div', {
+          className: 'dsh-git-menu-item',
+          onClick: () => {
+            setModal({ type: 'createBranch', targetCommit: contextMenu.commit.hash });
+            setModalInput('');
+            setContextMenu(null);
+          }
+        }, '在此提交创建分支 (Create Branch)...'),
+        h('div', {
+          className: 'dsh-git-menu-item',
+          onClick: () => {
+            setModal({ type: 'createTag', targetCommit: contextMenu.commit.hash });
+            setModalInput('');
+            setModalExtra('');
+            setContextMenu(null);
+          }
+        }, '在此提交添加标签 (Create Tag)...'),
+        h('div', { className: 'dsh-git-menu-divider' }),
+        h('div', {
+          className: 'dsh-git-menu-item',
+          onClick: () => {
+            navigator.clipboard?.writeText(contextMenu.commit.hash);
+            showToast('已复制完整 SHA: ' + contextMenu.commit.hash);
+            setContextMenu(null);
+          }
+        }, '复制完整 SHA 散列值'),
+        h('div', {
+          className: 'dsh-git-menu-item',
+          onClick: () => {
+            setModal({ type: 'reset', targetCommit: contextMenu.commit.hash });
+            setContextMenu(null);
+          }
+        }, 'Reset 当前分支到此提交...')
+      ),
+
+      // 6. Modals
+      modal && h('div', { className: 'dsh-git-modal-overlay', onClick: () => setModal(null) },
+        h('div', { className: 'dsh-git-modal', onClick: (e) => e.stopPropagation() },
+          modal.type === 'createBranch' && [
+            h('div', { key: 't', className: 'dsh-git-modal-title' }, '基于提交创建新分支'),
+            h('div', { key: 'st', style: { fontSize: 12, color: '#94a3b8' } }, `目标提交: ${modal.targetCommit.slice(0, 7)}`),
+            h('input', {
+              key: 'inp',
+              type: 'text',
+              className: 'dsh-git-input',
+              placeholder: '输入新分支名称 (如 feature/my-work)',
+              value: modalInput,
+              onChange: (e) => setModalInput(e.target.value),
+              autoFocus: true
+            }),
+            h('div', { key: 'act', className: 'dsh-git-modal-actions' },
+              h('button', { className: 'dsh-git-btn', onClick: () => setModal(null) }, '取消'),
+              h('button', { className: 'dsh-git-btn dsh-git-btn-primary', onClick: handleCreateBranch }, '创建分支')
+            )
+          ],
+          modal.type === 'createTag' && [
+            h('div', { key: 't', className: 'dsh-git-modal-title' }, '创建 Git 标签 (Tag)'),
+            h('div', { key: 'st', style: { fontSize: 12, color: '#94a3b8' } }, `目标提交: ${modal.targetCommit.slice(0, 7)}`),
+            h('input', {
+              key: 'inp1',
+              type: 'text',
+              className: 'dsh-git-input',
+              placeholder: '输入标签名 (如 v1.0.0)',
+              value: modalInput,
+              onChange: (e) => setModalInput(e.target.value),
+              autoFocus: true
+            }),
+            h('input', {
+              key: 'inp2',
+              type: 'text',
+              className: 'dsh-git-input',
+              placeholder: '附注信息 (可选)',
+              value: modalExtra,
+              onChange: (e) => setModalExtra(e.target.value)
+            }),
+            h('div', { key: 'act', className: 'dsh-git-modal-actions' },
+              h('button', { className: 'dsh-git-btn', onClick: () => setModal(null) }, '取消'),
+              h('button', { className: 'dsh-git-btn dsh-git-btn-primary', onClick: handleCreateTag }, '创建标签')
+            )
+          ],
+          modal.type === 'reset' && [
+            h('div', { key: 't', className: 'dsh-git-modal-title' }, 'Reset 当前分支'),
+            h('div', { key: 'st', style: { fontSize: 12, color: '#94a3b8' } }, `重置到提交: ${modal.targetCommit.slice(0, 7)}`),
+            h('div', { key: 'opts', style: { display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0' } },
+              h('button', { className: 'dsh-git-btn', onClick: () => handleReset('soft') }, 'Soft Reset (保留所有修改与暂存)'),
+              h('button', { className: 'dsh-git-btn', onClick: () => handleReset('mixed') }, 'Mixed Reset (默认，保留工作区修改，重置暂存区)'),
+              h('button', {
+                className: 'dsh-git-btn',
+                style: { borderColor: '#ef4444', color: '#f87171' },
+                onClick: () => handleReset('hard')
+              }, 'Hard Reset (丢弃所有未提交修改，危险操作)')
+            ),
+            h('div', { key: 'act', className: 'dsh-git-modal-actions' },
+              h('button', { className: 'dsh-git-btn', onClick: () => setModal(null) }, '取消')
+            )
+          ]
+        )
+      ),
+
+      // 7. Toast
+      toast && h('div', { className: 'dsh-git-toast' }, toast)
+    );
+  };
+}
+
+export function createGitGraphArtwork(React) {
+  const h = React.createElement;
+  return function GitGraphArtwork(props) {
+    return h('svg', {
+      width: props?.size || 24,
+      height: props?.size || 24,
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 2,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round'
+    },
+      h('circle', { cx: 18, cy: 18, r: 3 }),
+      h('circle', { cx: 6, cy: 6, r: 3 }),
+      h('path', { d: 'M6 9v12' }),
+      h('path', { d: 'M18 9a9 9 0 0 0-9 9' })
+    );
+  };
+}
+
+export function createGitGraphTitle(React) {
+  const h = React.createElement;
+  return function GitGraphTitle() {
+    return h('span', null, 'Git Graph');
+  };
+}
