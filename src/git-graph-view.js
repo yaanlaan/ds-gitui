@@ -883,11 +883,12 @@ export function createGitGraphComponent(React) {
                       if (ref.type === 'head') {
                         return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-head' }, 'HEAD');
                       }
-                      if (ref.type === 'branch') {
+                      if (ref.type === 'branch' || ref.type === 'remote') {
+                        const isRemote = ref.type === 'remote';
                         return h('span', {
                           key: rIdx,
-                          className: 'dsh-git-badge dsh-badge-branch',
-                          title: `双击检出分支 ${ref.name}`,
+                          className: `dsh-git-badge ${isRemote ? 'dsh-badge-remote' : 'dsh-badge-branch'}`,
+                          title: `双击检出此分支 (${ref.name})`,
                           onDoubleClick: (e) => {
                             e.stopPropagation();
                             handleCheckout(ref.name);
@@ -901,9 +902,6 @@ export function createGitGraphComponent(React) {
                           ),
                           ref.name
                         );
-                      }
-                      if (ref.type === 'remote') {
-                        return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-remote' }, ref.name);
                       }
                       if (ref.type === 'tag') {
                         return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-tag' }, `🏷️ ${ref.name}`);
