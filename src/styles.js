@@ -175,6 +175,14 @@ export const GIT_GRAPH_STYLES = `
   position: relative;
 }
 
+.dsh-git-graph-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
 .dsh-git-commit-row {
   display: flex;
   align-items: center;
