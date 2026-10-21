@@ -100,39 +100,42 @@ export const GIT_GRAPH_STYLES = `
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 1px 6px;
+  padding: 0 6px;
+  height: 18px;
+  line-height: 18px;
   font-size: 11px;
   font-weight: 500;
-  border-radius: 4px;
+  border-radius: 9px;
   white-space: nowrap;
 }
 
 .dsh-badge-branch {
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(59, 130, 246, 0.15);
   color: #60a5fa;
   border: 1px solid rgba(59, 130, 246, 0.4);
 }
 
 .dsh-badge-head {
-  background: #3b82f6;
-  color: #ffffff;
+  background: rgba(59, 130, 246, 0.25);
+  color: #93c5fd;
+  border: 1px solid #3b82f6;
   font-weight: 600;
 }
 
 .dsh-badge-remote {
-  background: rgba(147, 51, 234, 0.2);
+  background: rgba(147, 51, 234, 0.15);
   color: #c084fc;
   border: 1px solid rgba(147, 51, 234, 0.4);
 }
 
 .dsh-badge-tag {
-  background: rgba(245, 158, 11, 0.2);
+  background: rgba(245, 158, 11, 0.15);
   color: #fbbf24;
   border: 1px solid rgba(245, 158, 11, 0.4);
 }
 
 .dsh-badge-uncommitted {
-  background: rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.15);
   color: #f87171;
   border: 1px dashed rgba(239, 68, 68, 0.5);
   font-weight: 600;
@@ -175,12 +178,13 @@ export const GIT_GRAPH_STYLES = `
 .dsh-git-commit-row {
   display: flex;
   align-items: center;
-  height: 32px;
+  height: 24px;
   min-width: 100%;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
   cursor: pointer;
   transition: background-color 0.1s ease;
   font-size: 12px;
+  line-height: 24px;
 }
 
 .dsh-git-commit-row:hover {
@@ -189,7 +193,7 @@ export const GIT_GRAPH_STYLES = `
 
 .dsh-git-commit-row.selected {
   background-color: rgba(59, 130, 246, 0.15) !important;
-  border-left: 3px solid var(--dsh-accent, #3b82f6);
+  border-left: 2px solid var(--dsh-accent, #3b82f6);
 }
 
 .dsh-git-commit-row.uncommitted-row {
@@ -198,7 +202,7 @@ export const GIT_GRAPH_STYLES = `
 
 .dsh-git-col-graph {
   flex-shrink: 0;
-  height: 32px;
+  height: 24px;
   position: relative;
   overflow: visible;
 }
@@ -216,7 +220,7 @@ export const GIT_GRAPH_STYLES = `
 }
 
 .dsh-git-col-hash {
-  width: 75px;
+  width: 70px;
   flex-shrink: 0;
   font-family: monospace;
   font-size: 11px;
@@ -225,7 +229,7 @@ export const GIT_GRAPH_STYLES = `
 }
 
 .dsh-git-col-author {
-  width: 110px;
+  width: 100px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -238,21 +242,21 @@ export const GIT_GRAPH_STYLES = `
 }
 
 .dsh-git-author-avatar {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
-  background: #3b82f6;
+  background: rgba(59, 130, 246, 0.8);
   color: #fff;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   flex-shrink: 0;
 }
 
 .dsh-git-col-date {
-  width: 110px;
+  width: 90px;
   flex-shrink: 0;
   color: var(--dsh-fg-muted, #94a3b8);
   padding: 0 8px;
