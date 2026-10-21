@@ -263,6 +263,15 @@ export function createGitGraphComponent(React) {
     const [modalExtra, setModalExtra] = useState('');
     const [toast, setToast] = useState(null);
     const [stashes, setStashes] = useState([]);
+    const [viewMode, setViewMode] = useState('table'); // 'table' | 'dag' | 'branches'
+    const [dagDirection, setDagDirection] = useState('vertical'); // 'vertical' | 'horizontal'
+    const [dagZoom, setDagZoom] = useState(1);
+    const [dagPan, setDagPan] = useState({ x: 30, y: 30 });
+    const [isDragging, setIsDragging] = useState(false);
+    const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+    const [hoveredHash, setHoveredHash] = useState(null);
+    const [edgeDirection, setEdgeDirection] = useState('parent-to-child'); // 'parent-to-child' | 'child-to-parent'
+    const dagContainerRef = useRef(null);
 
     const showToast = useCallback((msg, duration = 3000) => {
       setToast(msg);
@@ -763,6 +772,262 @@ export function createGitGraphComponent(React) {
       return parts[parts.length - 1] || currentCwd;
     }, [currentCwd]);
 
+    const laneWidth = 14;
+    const rowHeight = 24;
+    const xOffset = 12;
+    const svgWidth = Math.max(48, (graphData.maxLane + 1) * laneWidth + 14);
+    const totalSvgHeight = graphData.rows.length * rowHeight;
+
+    function getPt(lane, row) {
+      return {
+        x: lane * laneWidth + xOffset,
+        y: row * rowHeight + rowHeight / 2
+      };
+    }
+
+    const handleDeleteTag = async (tagName) => {
+      if (!window.confirm(`确定要删除标签 "${tagName}" 吗？`)) return;
+      try {
+        const json = await apiCall('delete-tag', {}, { tagName });
+        if (json.success) {
+          showToast(`已成功删除标签: ${tagName}`);
+          loadRepoData();
+        } else {
+          showToast('删除标签失败: ' + (json.error || '未知错误'));
+        }
+      } catch (e) {
+        showToast('操作失败: ' + e.message);
+      }
+    };
+
+    // DAG Layout Engine
+    const dagLayout = useMemo(() => {
+      if (!graphData.rows || graphData.rows.length === 0) {
+        return { nodes: [], edges: [], width: 800, height: 600, nodeMap: new Map() };
+      }
+
+      const isVertical = dagDirection === 'vertical';
+      const W = isVertical ? 240 : 210;
+      const H = isVertical ? 68 : 64;
+      const gapX = isVertical ? 40 : 50;
+      const gapY = isVertical ? 32 : 30;
+      const padX = 40;
+      const padY = 40;
+
+      const nodes = [];
+      const nodeMap = new Map();
+      let maxCol = 0;
+      let maxRow = 0;
+
+      const rows = graphData.rows;
+      const total = rows.length;
+
+      // Check if dirty for uncommitted node
+      const hasUncommitted = !!repoOverview?.status?.dirty;
+      const rowOffset = (hasUncommitted && isVertical) ? 1 : 0;
+
+      if (hasUncommitted) {
+        const headRow = rows.find(r => r.commit.refs.some(rf => rf.isHead)) || rows[0];
+        const uncommittedCommit = {
+          hash: '*uncommitted*',
+          shortHash: '*uncomm*',
+          subject: `未提交修改 (${repoOverview.status.stagedCount || 0} 暂存 / ${repoOverview.status.unstagedCount || 0} 未暂存)`,
+          author: '工作区',
+          authorEmail: '',
+          date: new Date().toISOString(),
+          parents: headRow ? [headRow.commit.hash] : [],
+          refs: [{ name: 'WORKING TREE', isHead: false, isTag: false, isRemote: false, isUncommitted: true }],
+          isUncommitted: true
+        };
+        const headLane = headRow ? headRow.lane : 0;
+        const uncommittedX = isVertical ? (padX + headLane * (W + gapX)) : (padX + total * (W + gapX));
+        const uncommittedY = isVertical ? padY : (padY + headLane * (H + gapY));
+
+        if (!isVertical && total > maxCol) maxCol = total;
+        if (headLane > (isVertical ? maxCol : maxRow)) {
+          if (isVertical) maxCol = headLane;
+          else maxRow = headLane;
+        }
+
+        const uncommittedNode = {
+          commit: uncommittedCommit,
+          lane: headLane,
+          color: '#f59e0b',
+          colorIndex: 99,
+          x: uncommittedX,
+          y: uncommittedY,
+          width: W,
+          height: H,
+          connectors: {
+            top: { x: uncommittedX + W / 2, y: uncommittedY },
+            bottom: { x: uncommittedX + W / 2, y: uncommittedY + H },
+            left: { x: uncommittedX, y: uncommittedY + H / 2 },
+            right: { x: uncommittedX + W, y: uncommittedY + H / 2 }
+          }
+        };
+        nodes.push(uncommittedNode);
+        nodeMap.set('*uncommitted*', uncommittedNode);
+        nodeMap.set('*uncomm*', uncommittedNode);
+      }
+
+      for (let i = 0; i < total; i++) {
+        const row = rows[i];
+        const commit = row.commit;
+        const lane = row.lane;
+
+        let x, y;
+        if (isVertical) {
+          x = padX + lane * (W + gapX);
+          y = padY + (i + rowOffset) * (H + gapY);
+          if (lane > maxCol) maxCol = lane;
+          if ((i + rowOffset) > maxRow) maxRow = (i + rowOffset);
+        } else {
+          const col = (total - 1 - i);
+          x = padX + col * (W + gapX);
+          y = padY + lane * (H + gapY);
+          if (col > maxCol) maxCol = col;
+          if (lane > maxRow) maxRow = lane;
+        }
+
+        const node = {
+          commit,
+          lane,
+          color: row.color,
+          colorIndex: row.colorIndex,
+          x,
+          y,
+          width: W,
+          height: H,
+          connectors: {
+            top: { x: x + W / 2, y },
+            bottom: { x: x + W / 2, y: y + H },
+            left: { x, y: y + H / 2 },
+            right: { x: x + W, y: y + H / 2 }
+          }
+        };
+
+        nodes.push(node);
+        nodeMap.set(commit.hash, node);
+        if (commit.shortHash) nodeMap.set(commit.shortHash, node);
+        if (commit.hash && commit.hash.length >= 7) nodeMap.set(commit.hash.slice(0, 7), node);
+      }
+
+      // Compute Directed Edges
+      const edges = [];
+      for (let i = 0; i < nodes.length; i++) {
+        const childNode = nodes[i];
+        const childCommit = childNode.commit;
+        const parents = childCommit.parents || [];
+
+        for (let pIdx = 0; pIdx < parents.length; pIdx++) {
+          const pHash = parents[pIdx];
+          const parentNode = nodeMap.get(pHash);
+          if (!parentNode) continue;
+
+          let p1, p2, pathD;
+          if (isVertical) {
+            if (edgeDirection === 'parent-to-child') {
+              p1 = parentNode.connectors.top;
+              p2 = childNode.connectors.bottom;
+              const dy = Math.abs(p1.y - p2.y);
+              const cp = Math.max(16, dy * 0.5);
+              pathD = `M ${p1.x} ${p1.y} C ${p1.x} ${p1.y - cp}, ${p2.x} ${p2.y + cp}, ${p2.x} ${p2.y}`;
+            } else {
+              p1 = childNode.connectors.bottom;
+              p2 = parentNode.connectors.top;
+              const dy = Math.abs(p2.y - p1.y);
+              const cp = Math.max(16, dy * 0.5);
+              pathD = `M ${p1.x} ${p1.y} C ${p1.x} ${p1.y + cp}, ${p2.x} ${p2.y - cp}, ${p2.x} ${p2.y}`;
+            }
+          } else {
+            if (edgeDirection === 'parent-to-child') {
+              p1 = parentNode.connectors.right;
+              p2 = childNode.connectors.left;
+              const dx = Math.abs(p2.x - p1.x);
+              const cp = Math.max(20, dx * 0.5);
+              pathD = `M ${p1.x} ${p1.y} C ${p1.x + cp} ${p1.y}, ${p2.x - cp} ${p2.y}, ${p2.x} ${p2.y}`;
+            } else {
+              p1 = childNode.connectors.left;
+              p2 = parentNode.connectors.right;
+              const dx = Math.abs(p1.x - p2.x);
+              const cp = Math.max(20, dx * 0.5);
+              pathD = `M ${p1.x} ${p1.y} C ${p1.x - cp} ${p1.y}, ${p2.x + cp} ${p2.y}, ${p2.x} ${p2.y}`;
+            }
+          }
+
+          edges.push({
+            id: `${childCommit.hash}-${pHash}-${pIdx}`,
+            childHash: childCommit.hash,
+            parentHash: pHash,
+            color: childNode.color,
+            isMerge: parents.length > 1,
+            isDashed: childCommit.isUncommitted,
+            pathD
+          });
+        }
+      }
+
+      const totalWidth = padX * 2 + (maxCol + 1) * (W + gapX);
+      const totalHeight = padY * 2 + (maxRow + 1) * (H + gapY);
+
+      return { nodes, edges, width: totalWidth, height: totalHeight, nodeMap };
+    }, [graphData.rows, dagDirection, edgeDirection, repoOverview?.status]);
+
+    const relatedHashes = useMemo(() => {
+      if (!hoveredHash || !dagLayout.nodeMap) return null;
+      const set = new Set([hoveredHash]);
+      const target = dagLayout.nodeMap.get(hoveredHash);
+      if (target?.commit?.parents) {
+        target.commit.parents.forEach(p => set.add(p));
+      }
+      dagLayout.nodes.forEach(n => {
+        if (n.commit.parents && n.commit.parents.includes(hoveredHash)) {
+          set.add(n.commit.hash);
+        }
+      });
+      return set;
+    }, [hoveredHash, dagLayout]);
+
+    const handleDagMouseDown = (e) => {
+      if (e.target.closest('.dsh-dag-node') || e.target.closest('button') || e.target.closest('select') || e.target.closest('input')) {
+        return;
+      }
+      setIsDragging(true);
+      setDragStart({ x: e.clientX - dagPan.x, y: e.clientY - dagPan.y });
+    };
+
+    const handleDagMouseMove = (e) => {
+      if (!isDragging) return;
+      setDagPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+    };
+
+    const handleDagMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    const handleDagWheel = (e) => {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 0.12 : -0.12;
+      setDagZoom(z => Math.max(0.3, Math.min(2.5, +(z + delta).toFixed(2))));
+    };
+
+    const handleResetDagView = () => {
+      setDagZoom(1);
+      setDagPan({ x: 30, y: 30 });
+    };
+
+    const handleFitDagView = () => {
+      if (!dagContainerRef.current) return;
+      const { clientWidth, clientHeight } = dagContainerRef.current;
+      const scaleX = (clientWidth - 60) / Math.max(300, dagLayout.width);
+      const scaleY = (clientHeight - 80) / Math.max(300, dagLayout.height);
+      const newZoom = Math.max(0.3, Math.min(1.2, Math.min(scaleX, scaleY)));
+      setDagZoom(+newZoom.toFixed(2));
+      setDagPan({ x: 30, y: 30 });
+    };
+
+
+
     if (loading && !repoOverview && commits.length === 0) {
       return h('div', { className: 'dsh-git-graph-container' },
         h('div', { className: 'dsh-git-center-msg' },
@@ -808,18 +1073,546 @@ export function createGitGraphComponent(React) {
       );
     }
 
-    const laneWidth = 14;
-    const rowHeight = 24;
-    const xOffset = 12;
-    const svgWidth = Math.max(48, (graphData.maxLane + 1) * laneWidth + 14);
-    const totalSvgHeight = graphData.rows.length * rowHeight;
+    // Render 1: Table & Continuous Curve Subway Graph View
+    const renderTableView = () => {
+      return h('div', { className: 'dsh-git-table-container' },
+        graphData.rows.length === 0
+          ? h('div', { className: 'dsh-git-center-msg' }, '暂无匹配的 Git 提交记录')
+          : [
+              // Global Continuous Graph Overlay Canvas
+              h('svg', {
+                key: 'global-graph-canvas',
+                className: 'dsh-git-graph-canvas',
+                width: svgWidth,
+                height: totalSvgHeight
+              },
+                // 1. Vertical straight lines with subtle contrast borders
+                graphData.verticalLines.map((vl, idx) => {
+                  const p1 = getPt(vl.lane, vl.fromRow);
+                  const p2 = getPt(vl.lane, vl.toRow);
+                  const d = `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
+                  return h('g', { key: `vl-${idx}` },
+                    h('path', {
+                      d,
+                      fill: 'none',
+                      stroke: 'var(--dsh-layer-0, #131418)',
+                      strokeWidth: 4.5,
+                      strokeLinecap: 'round'
+                    }),
+                    h('path', {
+                      d,
+                      fill: 'none',
+                      stroke: vl.color,
+                      strokeWidth: 2,
+                      strokeDasharray: vl.isDashed ? '3,3' : 'none',
+                      strokeLinecap: 'round'
+                    })
+                  );
+                }),
 
-    function getPt(lane, row) {
-      return {
-        x: lane * laneWidth + xOffset,
-        y: row * rowHeight + rowHeight / 2
-      };
-    }
+                // 2. Continuous S-curves across lanes with subtle contrast borders
+                graphData.curves.map((c, idx) => {
+                  const p1 = getPt(c.fromLane, c.fromRow);
+                  const p2 = getPt(c.toLane, c.toRow);
+                  const dy = p2.y - p1.y;
+                  const cpOffset = dy * 0.5;
+                  const d = `M ${p1.x} ${p1.y} C ${p1.x} ${p1.y + cpOffset}, ${p2.x} ${p2.y - cpOffset}, ${p2.x} ${p2.y}`;
+                  return h('g', { key: `cv-${idx}` },
+                    h('path', {
+                      d,
+                      fill: 'none',
+                      stroke: 'var(--dsh-layer-0, #131418)',
+                      strokeWidth: 4.5,
+                      strokeLinecap: 'round'
+                    }),
+                    h('path', {
+                      d,
+                      fill: 'none',
+                      stroke: c.color,
+                      strokeWidth: 2,
+                      strokeDasharray: c.isDashed ? '3,3' : 'none',
+                      strokeLinecap: 'round'
+                    })
+                  );
+                }),
+
+                // 3. Commit Vertex Dots (rendered on top of paths)
+                graphData.rows.map((row, idx) => {
+                  const pt = getPt(row.lane, idx);
+                  const commit = row.commit;
+                  const isHead = commit.refs.some(r => r.isHead);
+                  const isMerge = commit.parents && commit.parents.length > 1;
+                  const isSelected = selectedCommit?.hash === commit.hash;
+                  const isUncommitted = commit.isUncommitted;
+
+                  return h('g', { key: `dot-${commit.hash}` },
+                    h('circle', {
+                      cx: pt.x,
+                      cy: pt.y,
+                      r: isHead ? 6.5 : (isMerge ? 5.5 : 4.5),
+                      fill: 'var(--dsh-layer-0, #131418)'
+                    }),
+                    (isSelected || isHead) && h('circle', {
+                      cx: pt.x,
+                      cy: pt.y,
+                      r: isHead ? 6 : 5.5,
+                      fill: 'none',
+                      stroke: isHead ? '#3b82f6' : row.color,
+                      strokeWidth: 2
+                    }),
+                    h('circle', {
+                      cx: pt.x,
+                      cy: pt.y,
+                      r: isUncommitted ? 3.5 : (isHead ? 3.5 : (isMerge ? 4 : 3)),
+                      fill: isUncommitted ? 'transparent' : (isMerge ? 'var(--dsh-layer-0, #131418)' : row.color),
+                      stroke: isUncommitted ? '#f59e0b' : (isMerge ? row.color : 'none'),
+                      strokeWidth: isUncommitted ? 1.5 : (isMerge ? 2 : 0)
+                    })
+                  );
+                })
+              ),
+
+              // HTML Commit Table Rows
+              graphData.rows.map((row, idx) => {
+                const commit = row.commit;
+                const isSelected = selectedCommit?.hash === commit.hash;
+                const isHead = commit.refs.some(r => r.isHead);
+
+                return h('div', {
+                  key: commit.hash,
+                  className: `dsh-git-commit-row ${isSelected ? 'selected' : ''} ${commit.isUncommitted ? 'uncommitted-row' : ''}`,
+                  onClick: () => handleSelectCommit(commit),
+                  onContextMenu: (e) => handleContextMenu(e, commit)
+                },
+                  // Placeholder for graph width
+                  h('div', {
+                    className: 'dsh-git-col-graph',
+                    style: { width: svgWidth }
+                  }),
+
+                  // Description / Message & Badges
+                  h('div', { className: 'dsh-git-col-desc', title: `${commit.hash} - ${commit.subject}` },
+                    isHead && h('span', { className: 'dsh-git-badge dsh-badge-head' }, 'HEAD'),
+                    commit.refs.map(ref =>
+                      h('span', {
+                        key: ref.name,
+                        className: `dsh-git-badge ${ref.isHead ? 'dsh-badge-head' : ref.isTag ? 'dsh-badge-tag' : ref.isRemote ? 'dsh-badge-remote' : (ref.isUncommitted ? 'dsh-badge-uncommitted' : 'dsh-badge-branch')}`,
+                        title: ref.name,
+                        onDoubleClick: (e) => {
+                          e.stopPropagation();
+                          if (!ref.isTag && !ref.isHead && !ref.isUncommitted) {
+                            handleCheckout(ref.name);
+                          }
+                        }
+                      }, ref.name)
+                    ),
+                    h('span', {
+                      style: {
+                        fontWeight: isHead ? 600 : 400,
+                        color: commit.isUncommitted ? '#f59e0b' : (isSelected ? '#fff' : 'inherit')
+                      }
+                    }, commit.subject)
+                  ),
+
+                  // Hash
+                  h('div', {
+                    className: 'dsh-git-col-hash',
+                    title: '点击复制完整 Commit Hash',
+                    onClick: (e) => {
+                      e.stopPropagation();
+                      if (!commit.isUncommitted) {
+                        navigator.clipboard?.writeText(commit.hash);
+                        showToast(`已复制: ${commit.hash}`);
+                      }
+                    }
+                  }, commit.shortHash),
+
+                  // Author
+                  h('div', { className: 'dsh-git-col-author' },
+                    h('span', { className: 'dsh-git-author-avatar' },
+                      commit.author ? commit.author.charAt(0).toUpperCase() : '?'
+                    ),
+                    h('span', null, commit.author)
+                  ),
+
+                  // Date
+                  h('div', { className: 'dsh-git-col-date', title: commit.date }, formatRelativeDate(commit.date))
+                );
+              })
+            ]
+      );
+    };
+
+    // Render 2: DAG Topology Network Graph View
+    const renderDagView = () => {
+      if (dagLayout.nodes.length === 0) {
+        return h('div', { className: 'dsh-git-center-msg' }, '暂无匹配的 Git 提交记录');
+      }
+
+      const canvasWidth = Math.max(1200, dagLayout.width + 120);
+      const canvasHeight = Math.max(800, dagLayout.height + 120);
+
+      return h('div', { className: 'dsh-git-dag-container' },
+        // DAG Auxiliary Toolbar
+        h('div', { className: 'dsh-git-dag-toolbar' },
+          h('div', { className: 'dsh-git-dag-toolbar-group' },
+            h('span', { style: { fontWeight: 600, color: '#e2e8f0' } }, '排版流向:'),
+            h('button', {
+              className: `dsh-git-btn ${dagDirection === 'vertical' ? 'dsh-git-btn-primary' : ''}`,
+              onClick: () => setDagDirection('vertical'),
+              title: '纵向从上至下按时间流动'
+            }, '↕ 纵向流向'),
+            h('button', {
+              className: `dsh-git-btn ${dagDirection === 'horizontal' ? 'dsh-git-btn-primary' : ''}`,
+              onClick: () => setDagDirection('horizontal'),
+              title: '横向从左至右时间演进'
+            }, '↔ 横向流向'),
+            h('button', {
+              className: 'dsh-git-btn',
+              onClick: () => setEdgeDirection(d => d === 'parent-to-child' ? 'child-to-parent' : 'parent-to-child'),
+              title: '切换连线箭头指示方向'
+            }, edgeDirection === 'parent-to-child' ? '↗ 流向: 演进 (父→子)' : '↘ 流向: 引用 (子→父)')
+          ),
+
+          h('div', { className: 'dsh-git-dag-toolbar-group' },
+            h('button', {
+              className: 'dsh-git-btn',
+              style: { padding: '2px 8px', fontSize: 13, fontWeight: 700 },
+              onClick: () => setDagZoom(z => Math.max(0.3, +(z - 0.15).toFixed(2))),
+              title: '缩小'
+            }, '−'),
+            h('span', { style: { minWidth: 40, textAlign: 'center', fontSize: 11, fontWeight: 600, color: '#f1f5f9' } },
+              `${Math.round(dagZoom * 100)}%`
+            ),
+            h('button', {
+              className: 'dsh-git-btn',
+              style: { padding: '2px 8px', fontSize: 13, fontWeight: 700 },
+              onClick: () => setDagZoom(z => Math.min(2.5, +(z + 0.15).toFixed(2))),
+              title: '放大'
+            }, '+'),
+            h('button', { className: 'dsh-git-btn', onClick: handleResetDagView, title: '重置缩放和位置' }, '1:1'),
+            h('button', { className: 'dsh-git-btn', onClick: handleFitDagView, title: '适应视口大小' }, '适应')
+          ),
+
+          h('div', { className: 'dsh-git-dag-hint' },
+            `共 ${dagLayout.nodes.length} 个节点 · 拖拽平移 · 滚轮缩放 · 悬停高亮链路`
+          )
+        ),
+
+        // DAG Viewport
+        h('div', {
+          ref: dagContainerRef,
+          className: `dsh-git-dag-viewport ${isDragging ? 'dragging' : ''}`,
+          onMouseDown: handleDagMouseDown,
+          onMouseMove: handleDagMouseMove,
+          onMouseUp: handleDagMouseUp,
+          onMouseLeave: handleDagMouseUp,
+          onWheel: handleDagWheel
+        },
+          h('div', {
+            className: 'dsh-git-dag-canvas',
+            style: {
+              transform: `translate(${dagPan.x}px, ${dagPan.y}px) scale(${dagZoom})`,
+              width: canvasWidth,
+              height: canvasHeight
+            }
+          },
+            // SVG Directed Edges
+            h('svg', {
+              className: 'dsh-git-dag-edges',
+              width: canvasWidth,
+              height: canvasHeight
+            },
+              h('defs', null,
+                h('marker', {
+                  id: 'dag-arrow',
+                  viewBox: '0 0 10 10',
+                  refX: 8,
+                  refY: 5,
+                  markerWidth: 6,
+                  markerHeight: 6,
+                  orient: 'auto'
+                },
+                  h('path', { d: 'M 0 1 L 9 5 L 0 9 z', fill: 'rgba(255, 255, 255, 0.45)' })
+                ),
+                h('marker', {
+                  id: 'dag-arrow-active',
+                  viewBox: '0 0 10 10',
+                  refX: 8,
+                  refY: 5,
+                  markerWidth: 7,
+                  markerHeight: 7,
+                  orient: 'auto'
+                },
+                  h('path', { d: 'M 0 1 L 9 5 L 0 9 z', fill: '#60a5fa' })
+                )
+              ),
+
+              dagLayout.edges.map(edge => {
+                const isRelated = relatedHashes
+                  ? (relatedHashes.has(edge.childHash) && relatedHashes.has(edge.parentHash))
+                  : false;
+                const isDimmed = relatedHashes && !isRelated;
+
+                return h('g', { key: edge.id },
+                  h('path', {
+                    d: edge.pathD,
+                    fill: 'none',
+                    stroke: 'var(--dsh-base, #131418)',
+                    strokeWidth: isRelated ? 6 : 4.5,
+                    strokeLinecap: 'round'
+                  }),
+                  h('path', {
+                    d: edge.pathD,
+                    fill: 'none',
+                    stroke: isRelated ? '#60a5fa' : edge.color,
+                    strokeWidth: isRelated ? 3 : 2,
+                    opacity: isDimmed ? 0.2 : (isRelated ? 1 : 0.75),
+                    strokeDasharray: edge.isDashed ? '4,4' : (edge.isMerge ? '5,3' : 'none'),
+                    strokeLinecap: 'round',
+                    markerEnd: isRelated ? 'url(#dag-arrow-active)' : 'url(#dag-arrow)'
+                  })
+                );
+              })
+            ),
+
+            // HTML Node Cards
+            dagLayout.nodes.map(node => {
+              const commit = node.commit;
+              const isSelected = selectedCommit?.hash === commit.hash;
+              const isHovered = hoveredHash === commit.hash;
+              const isRelated = relatedHashes && relatedHashes.has(commit.hash) && !isHovered;
+              const isDimmed = relatedHashes && !relatedHashes.has(commit.hash);
+              const isHead = commit.refs.some(r => r.isHead);
+              const isMerge = commit.parents && commit.parents.length > 1;
+
+              let className = 'dsh-dag-node';
+              if (isSelected) className += ' selected';
+              if (isHovered) className += ' hovered';
+              if (isRelated) className += ' related';
+              if (isDimmed) className += ' dimmed';
+              if (commit.isUncommitted) className += ' uncommitted-row';
+
+              return h('div', {
+                key: commit.hash,
+                className,
+                style: {
+                  position: 'absolute',
+                  left: node.x,
+                  top: node.y,
+                  width: node.width,
+                  height: node.height,
+                  borderLeftColor: node.color,
+                  borderLeftWidth: 3,
+                  borderStyle: commit.isUncommitted ? 'dashed' : 'solid'
+                },
+                onClick: () => handleSelectCommit(commit),
+                onContextMenu: (e) => handleContextMenu(e, commit),
+                onMouseEnter: () => setHoveredHash(commit.hash),
+                onMouseLeave: () => setHoveredHash(null)
+              },
+                // Vertex Dot
+                h('div', {
+                  className: 'dsh-dag-vertex-dot',
+                  style: {
+                    background: node.color,
+                    left: dagDirection === 'vertical' ? '50%' : '-4px',
+                    top: dagDirection === 'vertical' ? '-4px' : '50%',
+                    transform: dagDirection === 'vertical' ? 'translateX(-50%)' : 'translateY(-50%)'
+                  }
+                }),
+
+                // Header
+                h('div', { className: 'dsh-dag-node-header' },
+                  h('span', { className: 'dsh-dag-node-hash' }, commit.shortHash),
+                  h('span', { className: 'dsh-dag-node-author', title: `${commit.author} <${commit.authorEmail}>` },
+                    h('span', { className: 'dsh-git-author-avatar' }, (commit.author || '?')[0].toUpperCase()),
+                    commit.author
+                  ),
+                  h('span', { className: 'dsh-dag-node-date' }, formatRelativeDate(commit.date))
+                ),
+
+                // Subject Title
+                h('div', { className: 'dsh-dag-node-subject', title: commit.subject }, commit.subject),
+
+                // Footer Badges
+                h('div', { className: 'dsh-dag-node-footer' },
+                  isHead && h('span', { className: 'dsh-git-badge dsh-badge-head' }, 'HEAD'),
+                  isMerge && h('span', { className: 'dsh-git-badge dsh-badge-merge' }, `Merge (${commit.parents.length})`),
+                  commit.refs.map(ref =>
+                    h('span', {
+                      key: ref.name,
+                      className: `dsh-git-badge ${ref.isHead ? 'dsh-badge-head' : ref.isTag ? 'dsh-badge-tag' : ref.isRemote ? 'dsh-badge-remote' : (ref.isUncommitted ? 'dsh-badge-uncommitted' : 'dsh-badge-branch')}`,
+                      title: ref.name,
+                      onDoubleClick: (e) => {
+                        e.stopPropagation();
+                        if (!ref.isTag && !ref.isHead && !ref.isUncommitted) handleCheckout(ref.name);
+                      }
+                    }, ref.name)
+                  )
+                )
+              );
+            })
+          )
+        )
+      );
+    };
+
+    // Render 3: Branch Topology Overview
+    const renderBranchesView = () => {
+      const localBranches = repoOverview?.branches?.filter(b => !b.isRemote) || [];
+      const remoteBranches = repoOverview?.branches?.filter(b => b.isRemote) || [];
+      const tags = repoOverview?.tags || [];
+
+      return h('div', { className: 'dsh-git-branches-container' },
+        // Summary Stats
+        h('div', { className: 'dsh-git-branch-stats-bar' },
+          h('div', { className: 'dsh-git-stat-card' },
+            h('div', { className: 'dsh-git-stat-num', style: { color: '#60a5fa' } }, repoOverview?.currentBranch || '-'),
+            h('div', { className: 'dsh-git-stat-label' }, '当前活跃分支 (HEAD)')
+          ),
+          h('div', { className: 'dsh-git-stat-card' },
+            h('div', { className: 'dsh-git-stat-num', style: { color: '#34d399' } }, localBranches.length),
+            h('div', { className: 'dsh-git-stat-label' }, '本地分支数')
+          ),
+          h('div', { className: 'dsh-git-stat-card' },
+            h('div', { className: 'dsh-git-stat-num', style: { color: '#c084fc' } }, remoteBranches.length),
+            h('div', { className: 'dsh-git-stat-label' }, '远程跟踪分支')
+          ),
+          h('div', { className: 'dsh-git-stat-card' },
+            h('div', { className: 'dsh-git-stat-num', style: { color: '#fbbf24' } }, tags.length),
+            h('div', { className: 'dsh-git-stat-label' }, '标签 (Tags)')
+          )
+        ),
+
+        // Local Branches Section
+        h('div', null,
+          h('div', { className: 'dsh-git-branch-section-title' },
+            h('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 },
+              h('line', { x1: 6, y1: 3, x2: 6, y2: 15 }),
+              h('circle', { cx: 18, cy: 6, r: 3 }),
+              h('circle', { cx: 6, cy: 18, r: 3 }),
+              h('path', { d: 'M18 9a9 9 0 0 1-9 9' })
+            ),
+            '本地分支 (Local Branches)'
+          ),
+          h('div', { className: 'dsh-git-branch-grid' },
+            localBranches.map(b => {
+              const latestCommit = commits.find(c => c.refs.some(r => r.name === b.name) || (b.isHead && c.refs.some(r => r.isHead)));
+              return h('div', {
+                key: b.name,
+                className: `dsh-git-branch-card ${b.isHead ? 'is-head' : ''}`
+              },
+                h('div', { className: 'dsh-git-branch-card-header' },
+                  h('span', { className: 'dsh-git-branch-card-name', title: b.name },
+                    h('span', { className: `dsh-git-badge ${b.isHead ? 'dsh-badge-head' : 'dsh-badge-branch'}` },
+                      b.isHead ? '* HEAD' : 'branch'
+                    ),
+                    b.name
+                  ),
+                  latestCommit && h('span', { className: 'dsh-dag-node-hash' }, latestCommit.shortHash)
+                ),
+                latestCommit && h('div', { className: 'dsh-git-branch-card-commit', title: latestCommit.subject },
+                  `${latestCommit.author}: ${latestCommit.subject}`
+                ),
+                h('div', { className: 'dsh-git-branch-card-actions' },
+                  !b.isHead && h('button', {
+                    className: 'dsh-git-btn dsh-git-btn-primary',
+                    style: { padding: '2px 8px', fontSize: 11 },
+                    onClick: () => handleCheckout(b.name)
+                  }, '检出 (Checkout)'),
+                  !b.isHead && h('button', {
+                    className: 'dsh-git-btn',
+                    style: { padding: '2px 8px', fontSize: 11 },
+                    onClick: () => handleMerge(b.name)
+                  }, '合并到当前'),
+                  h('button', {
+                    className: 'dsh-git-btn',
+                    style: { padding: '2px 8px', fontSize: 11 },
+                    onClick: () => {
+                      setSelectedBranch(b.name);
+                      setViewMode('dag');
+                      loadRepoData(b.name);
+                    }
+                  }, '拓扑图'),
+                  h('button', {
+                    className: 'dsh-git-btn',
+                    style: { padding: '2px 8px', fontSize: 11 },
+                    onClick: () => {
+                      setSelectedBranch(b.name);
+                      setViewMode('table');
+                      loadRepoData(b.name);
+                    }
+                  }, '列表'),
+                  !b.isHead && h('button', {
+                    className: 'dsh-git-btn',
+                    style: { padding: '2px 8px', fontSize: 11, color: '#f87171' },
+                    onClick: () => handleDeleteBranch(b.name)
+                  }, '删除')
+                )
+              );
+            })
+          )
+        ),
+
+        // Remote Branches Section
+        remoteBranches.length > 0 && h('div', null,
+          h('div', { className: 'dsh-git-branch-section-title' }, '远程跟踪分支 (Remote Branches)'),
+          h('div', { className: 'dsh-git-branch-grid' },
+            remoteBranches.map(b =>
+              h('div', { key: b.name, className: 'dsh-git-branch-card' },
+                h('div', { className: 'dsh-git-branch-card-header' },
+                  h('span', { className: 'dsh-git-branch-card-name' },
+                    h('span', { className: 'dsh-git-badge dsh-badge-remote' }, 'remote'),
+                    b.name
+                  )
+                ),
+                h('div', { className: 'dsh-git-branch-card-actions' },
+                  h('button', {
+                    className: 'dsh-git-btn',
+                    style: { padding: '2px 8px', fontSize: 11 },
+                    onClick: () => {
+                      const localName = b.name.replace(/^origin\//, '');
+                      setModal({ type: 'createBranch', targetCommit: b.name });
+                      setModalInput(localName);
+                    }
+                  }, '从远程创建本地分支')
+                )
+              )
+            )
+          )
+        ),
+
+        // Tags Section
+        tags.length > 0 && h('div', null,
+          h('div', { className: 'dsh-git-branch-section-title' }, '标签 (Tags)'),
+          h('div', { className: 'dsh-git-branch-grid' },
+            tags.map(t =>
+              h('div', { key: t, className: 'dsh-git-branch-card' },
+                h('div', { className: 'dsh-git-branch-card-header' },
+                  h('span', { className: 'dsh-git-branch-card-name' },
+                    h('span', { className: 'dsh-git-badge dsh-badge-tag' }, 'tag'),
+                    t
+                  )
+                ),
+                h('div', { className: 'dsh-git-branch-card-actions' },
+                  h('button', {
+                    className: 'dsh-git-btn',
+                    style: { padding: '2px 8px', fontSize: 11 },
+                    onClick: () => handleCheckout(t)
+                  }, '检出标签'),
+                  h('button', {
+                    className: 'dsh-git-btn',
+                    style: { padding: '2px 8px', fontSize: 11, color: '#f87171' },
+                    onClick: () => handleDeleteTag(t)
+                  }, '删除')
+                )
+              )
+            )
+          )
+        )
+      );
+    };
 
     return h('div', { className: 'dsh-git-graph-container' },
       // 1. Top Toolbar
@@ -856,6 +1649,54 @@ export function createGitGraphComponent(React) {
                   )
                 )
               : h('span', { style: { color: '#60a5fa' } }, cwdDisplayName)
+          )
+        ),
+
+        // View Mode Switcher
+        h('div', { className: 'dsh-git-toolbar-group' },
+          h('div', { className: 'dsh-git-view-switcher' },
+            h('button', {
+              className: `dsh-git-view-tab ${viewMode === 'table' ? 'active' : ''}`,
+              title: '列表图谱 (VSCode Git Graph 风格表格与轨道线)',
+              onClick: () => setViewMode('table')
+            },
+              h('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 },
+                h('line', { x1: 8, y1: 6, x2: 21, y2: 6 }),
+                h('line', { x1: 8, y1: 12, x2: 21, y2: 12 }),
+                h('line', { x1: 8, y1: 18, x2: 21, y2: 18 }),
+                h('line', { x1: 3, y1: 6, x2: 3.01, y2: 6 }),
+                h('line', { x1: 3, y1: 12, x2: 3.01, y2: 12 }),
+                h('line', { x1: 3, y1: 18, x2: 3.01, y2: 18 })
+              ),
+              '列表图谱'
+            ),
+            h('button', {
+              className: `dsh-git-view-tab ${viewMode === 'dag' ? 'active' : ''}`,
+              title: 'DAG 拓扑节点图 (自由 2D 节点关系图谱、缩放平移、分支汇聚)',
+              onClick: () => setViewMode('dag')
+            },
+              h('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 },
+                h('circle', { cx: 18, cy: 5, r: 3 }),
+                h('circle', { cx: 6, cy: 12, r: 3 }),
+                h('circle', { cx: 18, cy: 19, r: 3 }),
+                h('line', { x1: 8.59, y1: 13.51, x2: 15.42, y2: 17.49 }),
+                h('line', { x1: 15.41, y1: 6.51, x2: 8.59, y2: 10.49 })
+              ),
+              '拓扑节点图'
+            ),
+            h('button', {
+              className: `dsh-git-view-tab ${viewMode === 'branches' ? 'active' : ''}`,
+              title: '分支拓扑网络 (查看所有分支派生状态、HEAD 及一键操作)',
+              onClick: () => setViewMode('branches')
+            },
+              h('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2 },
+                h('line', { x1: 6, y1: 3, x2: 6, y2: 15 }),
+                h('circle', { cx: 18, cy: 6, r: 3 }),
+                h('circle', { cx: 6, cy: 18, r: 3 }),
+                h('path', { d: 'M18 9a9 9 0 0 1-9 9' })
+              ),
+              '分支网络'
+            )
           )
         ),
 
@@ -960,247 +1801,11 @@ export function createGitGraphComponent(React) {
         )
       ),
 
-      // 3. Main Commit Table & Graph
+      // 3. Main Area: Table View | DAG Topology View | Branches View
       h('div', { className: 'dsh-git-main-area' },
-        h('div', { className: 'dsh-git-table-container' },
-          graphData.rows.length === 0
-            ? h('div', { className: 'dsh-git-center-msg' }, '暂无匹配的 Git 提交记录')
-            : [
-                // Global Continuous Graph Overlay Canvas
-                h('svg', {
-                  key: 'global-graph-canvas',
-                  className: 'dsh-git-graph-canvas',
-                  width: svgWidth,
-                  height: totalSvgHeight
-                },
-                  // 1. Vertical straight lines with subtle contrast borders
-                  graphData.verticalLines.map((vl, idx) => {
-                    const p1 = getPt(vl.lane, vl.fromRow);
-                    const p2 = getPt(vl.lane, vl.toRow);
-                    const d = `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
-                    return h('g', { key: `vl-${idx}` },
-                      h('path', {
-                        d,
-                        fill: 'none',
-                        stroke: 'var(--dsh-layer-0, #131418)',
-                        strokeWidth: 4.5,
-                        strokeLinecap: 'round'
-                      }),
-                      h('path', {
-                        d,
-                        fill: 'none',
-                        stroke: vl.color,
-                        strokeWidth: 2,
-                        strokeDasharray: vl.isDashed ? '3,3' : 'none',
-                        strokeLinecap: 'round'
-                      })
-                    );
-                  }),
-
-                  // 2. Continuous S-curves across lanes with subtle contrast borders
-                  graphData.curves.map((c, idx) => {
-                    const p1 = getPt(c.fromLane, c.fromRow);
-                    const p2 = getPt(c.toLane, c.toRow);
-                    const dy = p2.y - p1.y;
-                    const cpOffset = dy * 0.5;
-                    const d = `M ${p1.x} ${p1.y} C ${p1.x} ${p1.y + cpOffset}, ${p2.x} ${p2.y - cpOffset}, ${p2.x} ${p2.y}`;
-                    return h('g', { key: `cv-${idx}` },
-                      h('path', {
-                        d,
-                        fill: 'none',
-                        stroke: 'var(--dsh-layer-0, #131418)',
-                        strokeWidth: 4.5,
-                        strokeLinecap: 'round'
-                      }),
-                      h('path', {
-                        d,
-                        fill: 'none',
-                        stroke: c.color,
-                        strokeWidth: 2,
-                        strokeDasharray: c.isDashed ? '3,3' : 'none',
-                        strokeLinecap: 'round'
-                      })
-                    );
-                  }),
-
-                  // 3. Node markers on top of lines
-                  graphData.rows.map((row, idx) => {
-                    const { commit, lane, color } = row;
-                    const pt = getPt(lane, idx);
-
-                    if (commit.isUncommitted) {
-                      return h('g', { key: `node-${idx}` },
-                        h('circle', {
-                          cx: pt.x,
-                          cy: pt.y,
-                          r: 4.5,
-                          fill: 'var(--dsh-layer-0, #131418)'
-                        }),
-                        h('circle', {
-                          cx: pt.x,
-                          cy: pt.y,
-                          r: 4,
-                          fill: 'none',
-                          stroke: '#f59e0b',
-                          strokeWidth: 2,
-                          strokeDasharray: '2,2'
-                        })
-                      );
-                    }
-
-                    const isMerge = commit.parents && commit.parents.length > 1;
-
-                    if (commit.isHead) {
-                      return h('g', { key: `node-${idx}` },
-                        h('circle', {
-                          cx: pt.x,
-                          cy: pt.y,
-                          r: 6.5,
-                          fill: 'none',
-                          stroke: color,
-                          strokeWidth: 1.5
-                        }),
-                        h('circle', {
-                          cx: pt.x,
-                          cy: pt.y,
-                          r: 3.5,
-                          fill: color,
-                          stroke: 'var(--dsh-layer-0, #131418)',
-                          strokeWidth: 1.5
-                        })
-                      );
-                    }
-
-                    if (isMerge) {
-                      return h('g', { key: `node-${idx}` },
-                        h('circle', {
-                          cx: pt.x,
-                          cy: pt.y,
-                          r: 4.5,
-                          fill: color,
-                          stroke: 'var(--dsh-layer-0, #131418)',
-                          strokeWidth: 1.5
-                        }),
-                        h('circle', {
-                          cx: pt.x,
-                          cy: pt.y,
-                          r: 1.8,
-                          fill: 'var(--dsh-layer-0, #131418)'
-                        })
-                      );
-                    }
-
-                    return h('circle', {
-                      key: `node-${idx}`,
-                      cx: pt.x,
-                      cy: pt.y,
-                      r: 3.5,
-                      fill: color,
-                      stroke: 'var(--dsh-layer-0, #131418)',
-                      strokeWidth: 1.5
-                    });
-                  })
-                ),
-
-                // Table rows
-                graphData.rows.map((row, idx) => {
-                  const { commit } = row;
-                  const isSelected = selectedCommit?.hash === commit.hash;
-
-                  return h('div', {
-                    key: commit.hash + idx,
-                    className: `dsh-git-commit-row ${isSelected ? 'selected' : ''} ${commit.isUncommitted ? 'uncommitted-row' : ''}`,
-                    onClick: () => handleSelectCommit(commit),
-                    onContextMenu: (e) => handleContextMenu(e, commit)
-                  },
-                    // Placeholder cell for SVG graph alignment
-                    h('div', { className: 'dsh-git-col-graph', style: { width: svgWidth } }),
-
-                    // Commit Description & Badges
-                    h('div', { className: 'dsh-git-col-desc' },
-                    commit.refs.map((ref, rIdx) => {
-                      if (ref.type === 'head') {
-                        return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-head' }, 'HEAD');
-                      }
-                      if (ref.type === 'branch' || ref.type === 'remote') {
-                        const isRemote = ref.type === 'remote';
-                        return h('span', {
-                          key: rIdx,
-                          className: `dsh-git-badge ${isRemote ? 'dsh-badge-remote' : 'dsh-badge-branch'}`,
-                          title: `双击检出此分支 (${ref.name})`,
-                          onDoubleClick: (e) => {
-                            e.stopPropagation();
-                            handleCheckout(ref.name);
-                          }
-                        },
-                          h('svg', { width: 10, height: 10, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.5 },
-                            h('line', { x1: 6, y1: 3, x2: 6, y2: 15 }),
-                            h('circle', { cx: 18, cy: 6, r: 3 }),
-                            h('circle', { cx: 6, cy: 18, r: 3 }),
-                            h('path', { d: 'M18 9a9 9 0 0 1-9 9' })
-                          ),
-                          ref.name
-                        );
-                      }
-                      if (ref.type === 'tag') {
-                        return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-tag' },
-                          h('svg', {
-                            width: 10,
-                            height: 10,
-                            viewBox: '0 0 24 24',
-                            fill: 'none',
-                            stroke: 'currentColor',
-                            strokeWidth: 2.2,
-                            strokeLinecap: 'round',
-                            strokeLinejoin: 'round'
-                          },
-                            h('path', { d: 'M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z' }),
-                            h('line', { x1: 7, y1: 7, x2: 7.01, y2: 7 })
-                          ),
-                          ref.name
-                        );
-                      }
-                      if (ref.type === 'uncommitted') {
-                        return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-uncommitted' }, '* 工作区未提交');
-                      }
-                      return null;
-                    }),
-                    h('span', {
-                      style: {
-                        fontWeight: commit.isHead ? 600 : 400,
-                        color: commit.isUncommitted ? '#f59e0b' : 'inherit'
-                      }
-                    }, commit.subject)
-                  ),
-
-                  // Short Hash
-                  h('div', {
-                    className: 'dsh-git-col-hash',
-                    title: '点击复制完整 SHA',
-                    onClick: (e) => {
-                      e.stopPropagation();
-                      if (!commit.isUncommitted) {
-                        navigator.clipboard?.writeText(commit.hash);
-                        showToast(`已复制: ${commit.hash}`);
-                      }
-                    }
-                  }, commit.shortHash),
-
-                  // Author
-                  h('div', { className: 'dsh-git-col-author' },
-                    h('span', { className: 'dsh-git-author-avatar' },
-                      commit.author ? commit.author.charAt(0).toUpperCase() : '?'
-                    ),
-                    h('span', null, commit.author)
-                  ),
-
-                  // Date
-                  h('div', { className: 'dsh-git-col-date', title: commit.date }, formatRelativeDate(commit.date))
-                );
-              })
-            ]
-        ),
-
+        viewMode === 'table' && renderTableView(),
+        viewMode === 'dag' && renderDagView(),
+        viewMode === 'branches' && renderBranchesView(),
         // 4. Commit Details & File Diff Drawer
         selectedCommit && h('div', { className: 'dsh-git-drawer' },
           h('div', { className: 'dsh-git-drawer-resizer' }),

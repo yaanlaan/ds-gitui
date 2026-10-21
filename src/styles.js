@@ -527,4 +527,332 @@ export const GIT_GRAPH_STYLES = `
   color: #fff;
   border-color: var(--dsh-accent, #3b82f6);
 }
+
+/* ==========================================================
+ * View Switcher & DAG Topology Graph Styles
+ * ========================================================== */
+
+.dsh-git-view-switcher {
+  display: inline-flex;
+  align-items: center;
+  background: var(--dsh-layer-2, rgba(0, 0, 0, 0.35));
+  border: 1px solid var(--dsh-border, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.dsh-git-view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--dsh-fg-muted, #94a3b8);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.dsh-git-view-tab:hover {
+  color: var(--dsh-fg-primary, #e2e8f0);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.dsh-git-view-tab.active {
+  background: var(--dsh-accent, #3b82f6);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+/* DAG Topology Graph Container & Viewport */
+.dsh-git-dag-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  background: var(--dsh-base, #131418);
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.dsh-git-dag-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--dsh-layer-1, rgba(255, 255, 255, 0.03));
+  border-bottom: 1px solid var(--dsh-border, rgba(255, 255, 255, 0.08));
+  font-size: 11px;
+  color: var(--dsh-fg-muted, #94a3b8);
+  z-index: 5;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dsh-git-dag-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dsh-git-dag-hint {
+  font-size: 11px;
+  color: var(--dsh-fg-muted, #64748b);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dsh-git-dag-viewport {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  cursor: grab;
+  user-select: none;
+}
+
+.dsh-git-dag-viewport.dragging {
+  cursor: grabbing;
+}
+
+.dsh-git-dag-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.dsh-git-dag-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* DAG Node Cards */
+.dsh-dag-node {
+  background: var(--dsh-layer-2, #1c1d24);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  z-index: 2;
+  box-sizing: border-box;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.dsh-dag-node:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  border-color: rgba(255, 255, 255, 0.3) !important;
+  z-index: 10;
+}
+
+.dsh-dag-node.selected {
+  border-color: var(--dsh-accent, #3b82f6) !important;
+  box-shadow: 0 0 0 2px var(--dsh-accent, #3b82f6), 0 6px 20px rgba(59, 130, 246, 0.35) !important;
+  z-index: 12;
+}
+
+.dsh-dag-node.related {
+  border-color: #60a5fa !important;
+  box-shadow: 0 0 0 1.5px rgba(96, 165, 250, 0.6), 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.dsh-dag-node.dimmed {
+  opacity: 0.3;
+}
+
+.dsh-dag-vertex-dot {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--dsh-layer-2, #1c1d24);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+}
+
+.dsh-dag-node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.dsh-dag-node-hash {
+  font-family: monospace;
+  font-weight: 600;
+  color: var(--dsh-fg-muted, #94a3b8);
+  font-size: 11px;
+}
+
+.dsh-dag-node-author {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--dsh-fg-secondary, #cbd5e1);
+  font-size: 11px;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-dag-node-date {
+  color: var(--dsh-fg-muted, #64748b);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.dsh-dag-node-subject {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dsh-fg-primary, #f1f5f9);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.dsh-dag-node-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+  overflow: hidden;
+}
+
+.dsh-badge-merge {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+}
+
+/* Branch Topology View */
+.dsh-git-branches-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dsh-git-branch-stats-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.dsh-git-stat-card {
+  background: var(--dsh-layer-1, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--dsh-border, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dsh-git-stat-num {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--dsh-fg-primary, #f1f5f9);
+}
+
+.dsh-git-stat-label {
+  font-size: 11px;
+  color: var(--dsh-fg-muted, #94a3b8);
+}
+
+.dsh-git-branch-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsh-fg-secondary, #cbd5e1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.dsh-git-branch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.dsh-git-branch-card {
+  background: var(--dsh-layer-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--dsh-border, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all 0.15s ease;
+}
+
+.dsh-git-branch-card:hover {
+  background: var(--dsh-hover-bg, rgba(255, 255, 255, 0.06));
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.dsh-git-branch-card.is-head {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.dsh-git-branch-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dsh-git-branch-card-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--dsh-fg-primary, #f1f5f9);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-git-branch-card-commit {
+  font-size: 11px;
+  color: var(--dsh-fg-muted, #94a3b8);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-git-branch-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
 `;
