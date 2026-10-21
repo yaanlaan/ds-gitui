@@ -375,6 +375,11 @@ export const GIT_GRAPH_STYLES = `
   font-weight: 600;
 }
 
+.dsh-diff-meta {
+  color: #6e7681;
+  font-style: italic;
+}
+
 /* Context Menu */
 .dsh-git-context-menu {
   position: fixed;

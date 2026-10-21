@@ -172,32 +172,36 @@ export function createGitGraphComponent(React) {
 
     // Initial CWD sync
     useEffect(() => {
-      if (!currentCwd) {
-        const detected = getActiveSessionCwd(props.sessionId);
-        if (detected) setCurrentCwd(detected);
-      }
-    }, [props.sessionId, currentCwd]);
-
-    // Load available workspaces
-    useEffect(() => {
       let isMounted = true;
-      (async () => {
-        try {
-          const res = await fetch('/api/git-graph/workspaces');
-          const json = await res.json();
-          if (isMounted && json.success && Array.isArray(json.workspaces)) {
-            setWorkspacesList(json.workspaces);
-            if (!currentCwd && json.currentCwd) {
-              setCurrentCwd(json.currentCwd);
-            }
-          }
-        } catch (e) {}
-      })();
+      const detected = getActiveSessionCwd(props.sessionId);
+      if (detected && detected !== currentCwd) {
+        setCurrentCwd(detected);
+        return;
+      }
+      
+      // If not detected yet (e.g. tree element not mounted), retry after a short delay
+      if (!currentCwd) {
+        const timer = setTimeout(() => {
+          if (!isMounted) return;
+          const retryDetected = getActiveSessionCwd(props.sessionId);
+          if (retryDetected) setCurrentCwd(retryDetected);
+        }, 500);
+        return () => {
+          isMounted = false;
+          clearTimeout(timer);
+        };
+      }
       return () => { isMounted = false; };
-    }, [currentCwd]);
+    }, [props.sessionId, currentCwd]);
 
     // Load repository overview and commits log
     const loadRepoData = useCallback(async (branch = selectedBranch) => {
+      const activeCwd = currentCwd || getActiveSessionCwd(props.sessionId);
+      if (!activeCwd) {
+        // CWD not resolved yet, do not mark as permanent error
+        return;
+      }
+
       setLoading(true);
       setError(null);
       try {
@@ -228,19 +232,49 @@ export function createGitGraphComponent(React) {
       } finally {
         setLoading(false);
       }
-    }, [apiCall, selectedBranch]);
+    }, [apiCall, currentCwd, props.sessionId, selectedBranch]);
 
     useEffect(() => {
-      loadRepoData();
-    }, [loadRepoData]);
+      if (currentCwd) {
+        loadRepoData();
+      }
+    }, [currentCwd, loadRepoData]);
 
-    const handleSelectFile = useCallback(async (hash, filePath) => {
+    const handleSelectFile = useCallback(async (commitOrHash, filePath) => {
       setSelectedFile(filePath);
       setLoadingDiff(true);
       try {
-        const json = await apiCall('diff', { hash, file: filePath });
+        let targetHash = commitOrHash;
+        if (typeof commitOrHash === 'object' && commitOrHash !== null) {
+          if (commitOrHash.isUncommitted || commitOrHash.hash === '*uncommitted*') {
+            targetHash = '*uncommitted*';
+          } else if (commitOrHash.parents && commitOrHash.parents.length > 1) {
+            targetHash = `${commitOrHash.parents[0]}..${commitOrHash.hash}`;
+          } else {
+            targetHash = commitOrHash.hash;
+          }
+        } else if (typeof commitOrHash === 'string') {
+          if (selectedCommit && selectedCommit.hash === commitOrHash) {
+            if (selectedCommit.parents && selectedCommit.parents.length > 1) {
+              targetHash = `${selectedCommit.parents[0]}..${selectedCommit.hash}`;
+            }
+          }
+        }
+
+        let json = await apiCall('diff', { hash: targetHash, file: filePath });
+        
+        // If git diff returns empty for a merge commit without range, retry with first-parent range
+        if (json.success && (!json.diff || json.diff.trim() === '') && typeof targetHash === 'string' && !targetHash.includes('..') && targetHash !== '*uncommitted*') {
+          try {
+            const retryJson = await apiCall('diff', { hash: `${targetHash}^1..${targetHash}`, file: filePath });
+            if (retryJson.success && retryJson.diff && retryJson.diff.trim() !== '') {
+              json = retryJson;
+            }
+          } catch {}
+        }
+
         if (json.success) {
-          setFileDiff(json.diff);
+          setFileDiff(json.diff ?? '');
         } else {
           setFileDiff('无法加载 Diff: ' + (json.error || '未知错误'));
         }
@@ -249,7 +283,7 @@ export function createGitGraphComponent(React) {
       } finally {
         setLoadingDiff(false);
       }
-    }, [apiCall]);
+    }, [apiCall, selectedCommit]);
 
     const handleSelectCommit = useCallback(async (commit) => {
       setSelectedCommit(commit);
@@ -303,7 +337,7 @@ export function createGitGraphComponent(React) {
         if (json.success && json.details) {
           setCommitDetails(json.details);
           if (json.details.files?.length > 0) {
-            handleSelectFile(commit.hash, json.details.files[0].path);
+            handleSelectFile(commit, json.details.files[0].path);
           }
         }
       } catch (err) {
@@ -995,7 +1029,11 @@ export function createGitGraphComponent(React) {
             h('button', {
               className: 'dsh-git-btn',
               style: { padding: '2px 8px' },
-              onClick: () => setSelectedCommit(null)
+              onClick: () => {
+                setSelectedCommit(null);
+                setSelectedFile(null);
+                setFileDiff(null);
+              }
             }, '关闭')
           ),
 
@@ -1011,7 +1049,7 @@ export function createGitGraphComponent(React) {
                     h('div', {
                       key: file.path,
                       className: `dsh-git-file-item ${selectedFile === file.path ? 'selected' : ''}`,
-                      onClick: () => handleSelectFile(selectedCommit.hash, file.path),
+                      onClick: () => handleSelectFile(selectedCommit, file.path),
                       title: file.path
                     },
                       h('div', { style: { display: 'flex', alignItems: 'center', overflow: 'hidden', flex: 1 } },
@@ -1039,16 +1077,19 @@ export function createGitGraphComponent(React) {
             h('div', { className: 'dsh-git-diff-viewer' },
               loadingDiff
                 ? h('div', { style: { padding: 20, textAlign: 'center', color: '#94a3b8' } }, '正在生成代码差异...')
-                : !fileDiff
+                : fileDiff === null
                   ? h('div', { style: { padding: 20, textAlign: 'center', color: '#94a3b8' } }, '点击左侧文件查看代码改动差异')
-                  : fileDiff.split('\n').map((line, lIdx) => {
-                      let className = 'dsh-diff-line';
-                      if (line.startsWith('+') && !line.startsWith('+++')) className += ' dsh-diff-added';
-                      else if (line.startsWith('-') && !line.startsWith('---')) className += ' dsh-diff-removed';
-                      else if (line.startsWith('@@') || line.startsWith('diff --git')) className += ' dsh-diff-header';
+                  : fileDiff.trim() === ''
+                    ? h('div', { style: { padding: 20, textAlign: 'center', color: '#94a3b8' } }, '该文件无内容变动或为二进制文件')
+                    : fileDiff.split('\n').map((line, lIdx) => {
+                        let className = 'dsh-diff-line';
+                        if (line.startsWith('+') && !line.startsWith('+++')) className += ' dsh-diff-added';
+                        else if (line.startsWith('-') && !line.startsWith('---')) className += ' dsh-diff-removed';
+                        else if (line.startsWith('@@') || line.startsWith('diff --git')) className += ' dsh-diff-header';
+                        else if (line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) className += ' dsh-diff-meta';
 
-                      return h('div', { key: lIdx, className }, line || ' ');
-                    })
+                        return h('div', { key: lIdx, className }, line || ' ');
+                      })
             )
           )
         )
