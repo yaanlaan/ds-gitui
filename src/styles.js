@@ -444,42 +444,174 @@ export const GIT_GRAPH_STYLES = `
 .dsh-status-A { background: #10b981; color: #fff; }
 .dsh-status-D { background: #ef4444; color: #fff; }
 .dsh-status-U { background: #f59e0b; color: #fff; }
+.dsh-status-R { background: #a855f7; color: #fff; }
+
+/* VSCode-inspired Diff Viewer */
+.dsh-diff-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #0d1117;
+}
+
+.dsh-diff-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: #161b22;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+}
+
+.dsh-diff-filepath {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  color: #e6edf3;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-diff-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.dsh-diff-stat-add {
+  color: #3fb950;
+  font-weight: 600;
+}
+
+.dsh-diff-stat-del {
+  color: #f85149;
+  font-weight: 600;
+}
 
 .dsh-git-diff-viewer {
   flex: 1;
   overflow: auto;
   background: #0d1117;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 11px;
-  line-height: 18px;
-  padding: 8px;
+  font-size: 12px;
+  line-height: 20px;
   color: #c9d1d9;
 }
 
-.dsh-diff-line {
-  white-space: pre-wrap;
-  word-break: break-all;
-  padding: 0 4px;
+.dsh-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  user-select: text;
 }
 
-.dsh-diff-added {
-  background-color: rgba(46, 160, 67, 0.2);
-  color: #7ee787;
+.dsh-diff-row {
+  display: flex;
+  width: 100%;
+  min-width: max-content;
 }
 
-.dsh-diff-removed {
-  background-color: rgba(248, 81, 73, 0.2);
-  color: #ffa198;
+.dsh-diff-row:hover {
+  background: rgba(255, 255, 255, 0.04);
 }
 
-.dsh-diff-header {
-  color: #8b949e;
+.dsh-diff-num-old,
+.dsh-diff-num-new {
+  width: 42px;
+  min-width: 42px;
+  text-align: right;
+  padding-right: 6px;
+  color: #6e7681;
+  font-size: 11px;
+  user-select: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.dsh-diff-marker {
+  width: 20px;
+  min-width: 20px;
+  text-align: center;
+  user-select: none;
   font-weight: 600;
 }
 
-.dsh-diff-meta {
-  color: #6e7681;
+.dsh-diff-code {
+  flex: 1;
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: inherit;
+}
+
+.dsh-diff-row-added {
+  background-color: rgba(46, 160, 67, 0.18);
+}
+
+.dsh-diff-row-added .dsh-diff-num-new {
+  color: #7ee787;
+}
+
+.dsh-diff-row-added .dsh-diff-marker {
+  color: #7ee787;
+}
+
+.dsh-diff-row-added .dsh-diff-code {
+  color: #e6edf3;
+}
+
+.dsh-diff-row-removed {
+  background-color: rgba(248, 81, 73, 0.18);
+}
+
+.dsh-diff-row-removed .dsh-diff-num-old {
+  color: #ffa198;
+}
+
+.dsh-diff-row-removed .dsh-diff-marker {
+  color: #ffa198;
+}
+
+.dsh-diff-row-removed .dsh-diff-code {
+  color: #ffa198;
+}
+
+.dsh-diff-row-hunk {
+  background: rgba(56, 139, 253, 0.14);
+  border-top: 1px solid rgba(56, 139, 253, 0.25);
+  border-bottom: 1px solid rgba(56, 139, 253, 0.25);
+  color: #58a6ff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 0;
+}
+
+.dsh-diff-hunk-content {
+  padding-left: 12px;
+}
+
+.dsh-diff-row-meta {
+  color: #8b949e;
+  font-size: 11px;
+  padding: 2px 12px;
   font-style: italic;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.dsh-diff-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #8b949e;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
 }
 
 /* Context Menu */
