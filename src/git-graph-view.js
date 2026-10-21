@@ -662,8 +662,20 @@ export function createGitGraphComponent(React) {
       h('div', { className: 'dsh-git-toolbar' },
         // Workspace Selector
         h('div', { className: 'dsh-git-toolbar-group' },
-          h('span', { title: currentCwd, style: { display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600, fontSize: 12 } },
-            '📁',
+          h('span', { title: currentCwd, style: { display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 12 } },
+            h('svg', {
+              width: 14,
+              height: 14,
+              viewBox: '0 0 24 24',
+              fill: 'none',
+              stroke: 'currentColor',
+              strokeWidth: 2,
+              strokeLinecap: 'round',
+              strokeLinejoin: 'round',
+              style: { flexShrink: 0, opacity: 0.85 }
+            },
+              h('path', { d: 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z' })
+            ),
             workspacesList.length > 0
               ? h('select', {
                   className: 'dsh-git-select',
@@ -757,7 +769,7 @@ export function createGitGraphComponent(React) {
       // 2. Working Tree Changes Bar
       repoOverview?.status?.dirty && h('div', { className: 'dsh-git-working-tree-bar' },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-          h('span', { style: { fontWeight: 600, color: '#f59e0b' } }, '⚡ 未提交改动:'),
+          h('span', { style: { fontWeight: 600, color: '#f59e0b' } }, '未提交改动:'),
           h('span', null,
             repoOverview.status.stagedCount > 0 && `已暂存: ${repoOverview.status.stagedCount} `,
             repoOverview.status.unstagedCount > 0 && `未暂存: ${repoOverview.status.unstagedCount} `,
@@ -904,7 +916,22 @@ export function createGitGraphComponent(React) {
                         );
                       }
                       if (ref.type === 'tag') {
-                        return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-tag' }, `🏷️ ${ref.name}`);
+                        return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-tag' },
+                          h('svg', {
+                            width: 10,
+                            height: 10,
+                            viewBox: '0 0 24 24',
+                            fill: 'none',
+                            stroke: 'currentColor',
+                            strokeWidth: 2.2,
+                            strokeLinecap: 'round',
+                            strokeLinejoin: 'round'
+                          },
+                            h('path', { d: 'M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z' }),
+                            h('line', { x1: 7, y1: 7, x2: 7.01, y2: 7 })
+                          ),
+                          ref.name
+                        );
                       }
                       if (ref.type === 'uncommitted') {
                         return h('span', { key: rIdx, className: 'dsh-git-badge dsh-badge-uncommitted' }, '* 工作区未提交');
@@ -969,7 +996,7 @@ export function createGitGraphComponent(React) {
               className: 'dsh-git-btn',
               style: { padding: '2px 8px' },
               onClick: () => setSelectedCommit(null)
-            }, '✕ 关闭')
+            }, '关闭')
           ),
 
           h('div', { className: 'dsh-git-drawer-body' },
