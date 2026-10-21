@@ -644,48 +644,97 @@ export const GIT_GRAPH_STYLES = `
 /* DAG Node Cards */
 .dsh-dag-node {
   background: var(--dsh-layer-2, #1c1d24);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  cursor: pointer;
+  gap: 5px;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
   z-index: 2;
   box-sizing: border-box;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
 }
 
 .dsh-dag-node:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
-  border-color: rgba(255, 255, 255, 0.3) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
+  border-color: rgba(255, 255, 255, 0.35) !important;
   z-index: 10;
+}
+
+.dsh-dag-node.dragging {
+  cursor: grabbing !important;
+  transform: scale(1.025);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.8), 0 0 0 2px var(--dsh-accent, #3b82f6) !important;
+  z-index: 60 !important;
+  transition: none !important;
 }
 
 .dsh-dag-node.selected {
   border-color: var(--dsh-accent, #3b82f6) !important;
-  box-shadow: 0 0 0 2px var(--dsh-accent, #3b82f6), 0 6px 20px rgba(59, 130, 246, 0.35) !important;
+  box-shadow: 0 0 0 2px var(--dsh-accent, #3b82f6), 0 8px 24px rgba(59, 130, 246, 0.35) !important;
   z-index: 12;
 }
 
 .dsh-dag-node.related {
   border-color: #60a5fa !important;
-  box-shadow: 0 0 0 1.5px rgba(96, 165, 250, 0.6), 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.75), 0 6px 18px rgba(0, 0, 0, 0.5);
+  z-index: 8;
 }
 
 .dsh-dag-node.dimmed {
-  opacity: 0.3;
+  opacity: 0.22;
 }
 
-.dsh-dag-vertex-dot {
+.dsh-dag-node.is-head-node {
+  border-color: #3b82f6 !important;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12) 0%, var(--dsh-layer-2, #1c1d24) 100%);
+  box-shadow: 0 0 14px rgba(59, 130, 246, 0.25), 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+/* Ports on 4 edges */
+.dsh-dag-port {
   position: absolute;
-  width: 9px;
-  height: 9px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  border: 2px solid var(--dsh-layer-2, #1c1d24);
-  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+  background: var(--dsh-layer-2, #1c1d24);
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+  z-index: 4;
+  transition: all 0.2s ease;
+}
+.dsh-dag-port.port-top {
+  top: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.dsh-dag-port.port-bottom {
+  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.dsh-dag-port.port-left {
+  left: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.dsh-dag-port.port-right {
+  right: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.dsh-dag-node:hover .dsh-dag-port,
+.dsh-dag-node.selected .dsh-dag-port,
+.dsh-dag-node.related .dsh-dag-port {
+  border-color: #60a5fa;
+  background: #3b82f6;
+  box-shadow: 0 0 6px rgba(96, 165, 250, 0.8);
 }
 
 .dsh-dag-node-header {
@@ -696,11 +745,49 @@ export const GIT_GRAPH_STYLES = `
   font-size: 11px;
 }
 
+.dsh-dag-header-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dsh-dag-drag-handle {
+  color: var(--dsh-fg-muted, #64748b);
+  display: flex;
+  align-items: center;
+  opacity: 0.6;
+  cursor: grab;
+}
+.dsh-dag-node:hover .dsh-dag-drag-handle {
+  opacity: 1;
+  color: var(--dsh-fg-secondary, #94a3b8);
+}
+
 .dsh-dag-node-hash {
-  font-family: monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-weight: 600;
-  color: var(--dsh-fg-muted, #94a3b8);
+  color: var(--dsh-fg-secondary, #cbd5e1);
   font-size: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.dsh-dag-copy-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--dsh-fg-muted, #64748b);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 3px;
+  transition: all 0.15s ease;
+}
+.dsh-dag-copy-icon-btn:hover {
+  color: var(--dsh-fg-primary, #f1f5f9);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .dsh-dag-node-author {
@@ -709,7 +796,7 @@ export const GIT_GRAPH_STYLES = `
   gap: 4px;
   color: var(--dsh-fg-secondary, #cbd5e1);
   font-size: 11px;
-  max-width: 90px;
+  max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -726,9 +813,11 @@ export const GIT_GRAPH_STYLES = `
   font-weight: 500;
   color: var(--dsh-fg-primary, #f1f5f9);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.35;
+  word-break: break-word;
 }
 
 .dsh-dag-node-footer {
@@ -736,7 +825,7 @@ export const GIT_GRAPH_STYLES = `
   align-items: center;
   gap: 4px;
   flex-wrap: wrap;
-  margin-top: 2px;
+  margin-top: 1px;
   overflow: hidden;
 }
 
@@ -744,6 +833,21 @@ export const GIT_GRAPH_STYLES = `
   background: rgba(168, 85, 247, 0.2);
   color: #c084fc;
   border: 1px solid rgba(168, 85, 247, 0.4);
+}
+
+/* Curve Edge Glow & Animations */
+@keyframes dsh-flow-dash {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.dsh-dag-edge-flow {
+  animation: dsh-flow-dash 1.2s linear infinite;
+}
+
+.dsh-dag-edge-active {
+  filter: drop-shadow(0 0 4px rgba(96, 165, 250, 0.8));
 }
 
 /* Branch Topology View */

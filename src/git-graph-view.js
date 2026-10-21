@@ -271,12 +271,25 @@ export function createGitGraphComponent(React) {
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
     const [hoveredHash, setHoveredHash] = useState(null);
     const [edgeDirection, setEdgeDirection] = useState('parent-to-child'); // 'parent-to-child' | 'child-to-parent'
+    const [nodePositions, setNodePositions] = useState({}); // { [hash]: { x, y } }
+    const [draggingNodeHash, setDraggingNodeHash] = useState(null);
+    const dragNodeRef = useRef(null); // { hash, startMouseX, startMouseY, startNodeX, startNodeY, hasMoved }
     const dagContainerRef = useRef(null);
 
     const showToast = useCallback((msg, duration = 3000) => {
       setToast(msg);
       setTimeout(() => setToast(null), duration);
     }, []);
+
+    const handleCopyHash = useCallback((e, text, label = 'SHA') => {
+      e.stopPropagation();
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text);
+        showToast(`已复制 ${label}: ${text.slice(0, 10)}`);
+      } else {
+        showToast(`Commit: ${text.slice(0, 10)}`);
+      }
+    }, [showToast]);
 
     // Universal API call helper attaching cwd & sessionId
     const apiCall = useCallback(async (action, queryParams = {}, postData = null) => {
@@ -807,10 +820,10 @@ export function createGitGraphComponent(React) {
       }
 
       const isVertical = dagDirection === 'vertical';
-      const W = isVertical ? 240 : 210;
-      const H = isVertical ? 68 : 64;
-      const gapX = isVertical ? 40 : 50;
-      const gapY = isVertical ? 32 : 30;
+      const W = isVertical ? 260 : 230;
+      const H = isVertical ? 76 : 72;
+      const gapX = isVertical ? 48 : 56;
+      const gapY = isVertical ? 42 : 36;
       const padX = 40;
       const padY = 40;
 
@@ -822,97 +835,60 @@ export function createGitGraphComponent(React) {
       const rows = graphData.rows;
       const total = rows.length;
 
-      // Check if dirty for uncommitted node
-      const hasUncommitted = !!repoOverview?.status?.dirty;
-      const rowOffset = (hasUncommitted && isVertical) ? 1 : 0;
-
-      if (hasUncommitted) {
-        const headRow = rows.find(r => r.commit.refs.some(rf => rf.isHead)) || rows[0];
-        const uncommittedCommit = {
-          hash: '*uncommitted*',
-          shortHash: '*uncomm*',
-          subject: `未提交修改 (${repoOverview.status.stagedCount || 0} 暂存 / ${repoOverview.status.unstagedCount || 0} 未暂存)`,
-          author: '工作区',
-          authorEmail: '',
-          date: new Date().toISOString(),
-          parents: headRow ? [headRow.commit.hash] : [],
-          refs: [{ name: 'WORKING TREE', isHead: false, isTag: false, isRemote: false, isUncommitted: true }],
-          isUncommitted: true
-        };
-        const headLane = headRow ? headRow.lane : 0;
-        const uncommittedX = isVertical ? (padX + headLane * (W + gapX)) : (padX + total * (W + gapX));
-        const uncommittedY = isVertical ? padY : (padY + headLane * (H + gapY));
-
-        if (!isVertical && total > maxCol) maxCol = total;
-        if (headLane > (isVertical ? maxCol : maxRow)) {
-          if (isVertical) maxCol = headLane;
-          else maxRow = headLane;
-        }
-
-        const uncommittedNode = {
-          commit: uncommittedCommit,
-          lane: headLane,
-          color: '#f59e0b',
-          colorIndex: 99,
-          x: uncommittedX,
-          y: uncommittedY,
-          width: W,
-          height: H,
-          connectors: {
-            top: { x: uncommittedX + W / 2, y: uncommittedY },
-            bottom: { x: uncommittedX + W / 2, y: uncommittedY + H },
-            left: { x: uncommittedX, y: uncommittedY + H / 2 },
-            right: { x: uncommittedX + W, y: uncommittedY + H / 2 }
-          }
-        };
-        nodes.push(uncommittedNode);
-        nodeMap.set('*uncommitted*', uncommittedNode);
-        nodeMap.set('*uncomm*', uncommittedNode);
-      }
-
       for (let i = 0; i < total; i++) {
         const row = rows[i];
         const commit = row.commit;
         const lane = row.lane;
 
-        let x, y;
+        // If uncommitted, enrich subject with current status
+        if (commit.isUncommitted || commit.hash === '*uncommitted*') {
+          if (repoOverview?.status) {
+            commit.subject = `未提交修改 (${repoOverview.status.stagedCount || 0} 暂存 / ${repoOverview.status.unstagedCount || 0} 未暂存)`;
+          }
+        }
+
+        let defaultX, defaultY;
         if (isVertical) {
-          x = padX + lane * (W + gapX);
-          y = padY + (i + rowOffset) * (H + gapY);
+          defaultX = padX + lane * (W + gapX);
+          defaultY = padY + i * (H + gapY);
           if (lane > maxCol) maxCol = lane;
-          if ((i + rowOffset) > maxRow) maxRow = (i + rowOffset);
+          if (i > maxRow) maxRow = i;
         } else {
           const col = (total - 1 - i);
-          x = padX + col * (W + gapX);
-          y = padY + lane * (H + gapY);
+          defaultX = padX + col * (W + gapX);
+          defaultY = padY + lane * (H + gapY);
           if (col > maxCol) maxCol = col;
           if (lane > maxRow) maxRow = lane;
         }
 
+        const custom = nodePositions[commit.hash] || (commit.isUncommitted ? nodePositions['*uncomm*'] : null);
+        const x = custom ? custom.x : defaultX;
+        const y = custom ? custom.y : defaultY;
+
         const node = {
           commit,
           lane,
-          color: row.color,
-          colorIndex: row.colorIndex,
+          color: commit.isUncommitted ? '#f59e0b' : row.color,
+          colorIndex: commit.isUncommitted ? 99 : row.colorIndex,
+          defaultX,
+          defaultY,
           x,
           y,
           width: W,
-          height: H,
-          connectors: {
-            top: { x: x + W / 2, y },
-            bottom: { x: x + W / 2, y: y + H },
-            left: { x, y: y + H / 2 },
-            right: { x: x + W, y: y + H / 2 }
-          }
+          height: H
         };
 
         nodes.push(node);
         nodeMap.set(commit.hash, node);
         if (commit.shortHash) nodeMap.set(commit.shortHash, node);
         if (commit.hash && commit.hash.length >= 7) nodeMap.set(commit.hash.slice(0, 7), node);
+        if (commit.isUncommitted) {
+          nodeMap.set('*uncommitted*', node);
+          nodeMap.set('*uncomm*', node);
+        }
       }
 
-      // Compute Directed Edges
+      // Compute Directed Edges with Adaptive Bézier Splines
       const edges = [];
       for (let i = 0; i < nodes.length; i++) {
         const childNode = nodes[i];
@@ -924,35 +900,96 @@ export function createGitGraphComponent(React) {
           const parentNode = nodeMap.get(pHash);
           if (!parentNode) continue;
 
-          let p1, p2, pathD;
+          const isMerge = parents.length > 1;
+          const cxP = parentNode.x + parentNode.width / 2;
+          const cyP = parentNode.y + parentNode.height / 2;
+          const cxC = childNode.x + childNode.width / 2;
+          const cyC = childNode.y + childNode.height / 2;
+
+          const dx = cxC - cxP;
+          const dy = cyC - cyP;
+
+          let pP, pC, cpP, cpC;
+
           if (isVertical) {
-            if (edgeDirection === 'parent-to-child') {
-              p1 = parentNode.connectors.top;
-              p2 = childNode.connectors.bottom;
-              const dy = Math.abs(p1.y - p2.y);
-              const cp = Math.max(16, dy * 0.5);
-              pathD = `M ${p1.x} ${p1.y} C ${p1.x} ${p1.y - cp}, ${p2.x} ${p2.y + cp}, ${p2.x} ${p2.y}`;
+            // 纵向视图为主
+            if (Math.abs(dy) >= Math.abs(dx) * 0.45) {
+              if (dy <= 0) {
+                // 标准情况：Child 在 Parent 上方
+                pP = { x: cxP, y: parentNode.y };
+                pC = { x: cxC, y: childNode.y + childNode.height };
+                const distY = Math.abs(dy);
+                const cpOffset = Math.max(26, distY * 0.48);
+                cpP = { x: pP.x, y: pP.y - cpOffset };
+                cpC = { x: pC.x, y: pC.y + cpOffset };
+              } else {
+                // 用户拖拽：Child 被拖到了 Parent 下方
+                pP = { x: cxP, y: parentNode.y + parentNode.height };
+                pC = { x: cxC, y: childNode.y };
+                const distY = Math.abs(dy);
+                const cpOffset = Math.max(26, distY * 0.48);
+                cpP = { x: pP.x, y: pP.y + cpOffset };
+                cpC = { x: pC.x, y: pC.y - cpOffset };
+              }
             } else {
-              p1 = childNode.connectors.bottom;
-              p2 = parentNode.connectors.top;
-              const dy = Math.abs(p2.y - p1.y);
-              const cp = Math.max(16, dy * 0.5);
-              pathD = `M ${p1.x} ${p1.y} C ${p1.x} ${p1.y + cp}, ${p2.x} ${p2.y - cp}, ${p2.x} ${p2.y}`;
+              // 用户拖拽：两节点横向偏向显著
+              if (dx >= 0) {
+                pP = { x: parentNode.x + parentNode.width, y: cyP };
+                pC = { x: childNode.x, y: cyC };
+                const cpOffset = Math.max(28, Math.abs(dx) * 0.5);
+                cpP = { x: pP.x + cpOffset, y: pP.y };
+                cpC = { x: pC.x - cpOffset, y: pC.y };
+              } else {
+                pP = { x: parentNode.x, y: cyP };
+                pC = { x: childNode.x + childNode.width, y: cyC };
+                const cpOffset = Math.max(28, Math.abs(dx) * 0.5);
+                cpP = { x: pP.x - cpOffset, y: pP.y };
+                cpC = { x: pC.x + cpOffset, y: pC.y };
+              }
             }
           } else {
-            if (edgeDirection === 'parent-to-child') {
-              p1 = parentNode.connectors.right;
-              p2 = childNode.connectors.left;
-              const dx = Math.abs(p2.x - p1.x);
-              const cp = Math.max(20, dx * 0.5);
-              pathD = `M ${p1.x} ${p1.y} C ${p1.x + cp} ${p1.y}, ${p2.x - cp} ${p2.y}, ${p2.x} ${p2.y}`;
+            // 横向视图为主
+            if (Math.abs(dx) >= Math.abs(dy) * 0.45) {
+              if (dx >= 0) {
+                // 标准情况：Child 在 Parent 右侧
+                pP = { x: parentNode.x + parentNode.width, y: cyP };
+                pC = { x: childNode.x, y: cyC };
+                const distX = Math.abs(dx);
+                const cpOffset = Math.max(26, distX * 0.48);
+                cpP = { x: pP.x + cpOffset, y: pP.y };
+                cpC = { x: pC.x - cpOffset, y: pC.y };
+              } else {
+                // 用户拖拽：Child 被拖到了 Parent 左侧
+                pP = { x: parentNode.x, y: cyP };
+                pC = { x: childNode.x + childNode.width, y: cyC };
+                const distX = Math.abs(dx);
+                const cpOffset = Math.max(26, distX * 0.48);
+                cpP = { x: pP.x - cpOffset, y: pP.y };
+                cpC = { x: pC.x + cpOffset, y: pC.y };
+              }
             } else {
-              p1 = childNode.connectors.left;
-              p2 = parentNode.connectors.right;
-              const dx = Math.abs(p1.x - p2.x);
-              const cp = Math.max(20, dx * 0.5);
-              pathD = `M ${p1.x} ${p1.y} C ${p1.x - cp} ${p1.y}, ${p2.x + cp} ${p2.y}, ${p2.x} ${p2.y}`;
+              // 垂直方向显著
+              if (dy >= 0) {
+                pP = { x: cxP, y: parentNode.y + parentNode.height };
+                pC = { x: cxC, y: childNode.y };
+                const cpOffset = Math.max(28, Math.abs(dy) * 0.5);
+                cpP = { x: pP.x, y: pP.y + cpOffset };
+                cpC = { x: pC.x, y: pC.y - cpOffset };
+              } else {
+                pP = { x: cxP, y: parentNode.y };
+                pC = { x: cxC, y: childNode.y + childNode.height };
+                const cpOffset = Math.max(28, Math.abs(dy) * 0.5);
+                cpP = { x: pP.x, y: pP.y - cpOffset };
+                cpC = { x: pC.x, y: pC.y + cpOffset };
+              }
             }
+          }
+
+          let pathD;
+          if (edgeDirection === 'parent-to-child') {
+            pathD = `M ${pP.x} ${pP.y} C ${cpP.x} ${cpP.y}, ${cpC.x} ${cpC.y}, ${pC.x} ${pC.y}`;
+          } else {
+            pathD = `M ${pC.x} ${pC.y} C ${cpC.x} ${cpC.y}, ${cpP.x} ${cpP.y}, ${pP.x} ${pP.y}`;
           }
 
           edges.push({
@@ -960,18 +997,23 @@ export function createGitGraphComponent(React) {
             childHash: childCommit.hash,
             parentHash: pHash,
             color: childNode.color,
-            isMerge: parents.length > 1,
+            isMerge,
             isDashed: childCommit.isUncommitted,
             pathD
           });
         }
       }
 
-      const totalWidth = padX * 2 + (maxCol + 1) * (W + gapX);
-      const totalHeight = padY * 2 + (maxRow + 1) * (H + gapY);
+      let calculatedWidth = padX * 2 + (maxCol + 1) * (W + gapX);
+      let calculatedHeight = padY * 2 + (maxRow + 1) * (H + gapY);
 
-      return { nodes, edges, width: totalWidth, height: totalHeight, nodeMap };
-    }, [graphData.rows, dagDirection, edgeDirection, repoOverview?.status]);
+      nodes.forEach(n => {
+        if (n.x + n.width + padX > calculatedWidth) calculatedWidth = n.x + n.width + padX;
+        if (n.y + n.height + padY > calculatedHeight) calculatedHeight = n.y + n.height + padY;
+      });
+
+      return { nodes, edges, width: calculatedWidth, height: calculatedHeight, nodeMap };
+    }, [graphData.rows, dagDirection, edgeDirection, repoOverview?.status, nodePositions]);
 
     const relatedHashes = useMemo(() => {
       if (!hoveredHash || !dagLayout.nodeMap) return null;
@@ -988,7 +1030,26 @@ export function createGitGraphComponent(React) {
       return set;
     }, [hoveredHash, dagLayout]);
 
+    const handleNodeMouseDown = (e, node) => {
+      if (e.button !== 0) return; // 仅左键拖拽
+      if (e.target.closest('button') || e.target.closest('a') || e.target.closest('.dsh-dag-copy-icon-btn')) {
+        return;
+      }
+      e.stopPropagation();
+
+      dragNodeRef.current = {
+        hash: node.commit.hash,
+        startMouseX: e.clientX,
+        startMouseY: e.clientY,
+        startNodeX: node.x,
+        startNodeY: node.y,
+        hasMoved: false
+      };
+      setDraggingNodeHash(node.commit.hash);
+    };
+
     const handleDagMouseDown = (e) => {
+      if (e.button !== 0) return;
       if (e.target.closest('.dsh-dag-node') || e.target.closest('button') || e.target.closest('select') || e.target.closest('input')) {
         return;
       }
@@ -996,14 +1057,69 @@ export function createGitGraphComponent(React) {
       setDragStart({ x: e.clientX - dagPan.x, y: e.clientY - dagPan.y });
     };
 
-    const handleDagMouseMove = (e) => {
-      if (!isDragging) return;
-      setDagPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
-    };
+    const dagZoomRef = useRef(dagZoom);
+    dagZoomRef.current = dagZoom;
+    const isDraggingRef = useRef(isDragging);
+    isDraggingRef.current = isDragging;
+    const dragStartRef = useRef(dragStart);
+    dragStartRef.current = dragStart;
+    const dagLayoutRef = useRef(dagLayout);
+    dagLayoutRef.current = dagLayout;
 
-    const handleDagMouseUp = () => {
-      setIsDragging(false);
-    };
+    useEffect(() => {
+      const handleWindowMouseMove = (e) => {
+        if (dragNodeRef.current) {
+          const d = dragNodeRef.current;
+          const zoom = dagZoomRef.current || 1;
+          const dx = (e.clientX - d.startMouseX) / zoom;
+          const dy = (e.clientY - d.startMouseY) / zoom;
+          if (!d.hasMoved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+            d.hasMoved = true;
+          }
+          if (d.hasMoved) {
+            setNodePositions(prev => ({
+              ...prev,
+              [d.hash]: {
+                x: Math.round(d.startNodeX + dx),
+                y: Math.round(d.startNodeY + dy)
+              }
+            }));
+          }
+          return;
+        }
+
+        if (isDraggingRef.current) {
+          setDagPan({
+            x: e.clientX - dragStartRef.current.x,
+            y: e.clientY - dragStartRef.current.y
+          });
+        }
+      };
+
+      const handleWindowMouseUp = () => {
+        if (dragNodeRef.current) {
+          const d = dragNodeRef.current;
+          if (!d.hasMoved) {
+            const targetCommit = (dagLayoutRef.current?.nodeMap?.get(d.hash))?.commit;
+            if (targetCommit) {
+              handleSelectCommit(targetCommit);
+            }
+          }
+          dragNodeRef.current = null;
+          setDraggingNodeHash(null);
+        }
+        if (isDraggingRef.current) {
+          setIsDragging(false);
+        }
+      };
+
+      window.addEventListener('mousemove', handleWindowMouseMove);
+      window.addEventListener('mouseup', handleWindowMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleWindowMouseMove);
+        window.removeEventListener('mouseup', handleWindowMouseUp);
+      };
+    }, [handleSelectCommit]);
 
     const handleDagWheel = (e) => {
       e.preventDefault();
@@ -1014,6 +1130,11 @@ export function createGitGraphComponent(React) {
     const handleResetDagView = () => {
       setDagZoom(1);
       setDagPan({ x: 30, y: 30 });
+    };
+
+    const handleResetNodePositions = () => {
+      setNodePositions({});
+      showToast('已复位所有节点至整齐网格排版');
     };
 
     const handleFitDagView = () => {
@@ -1249,8 +1370,8 @@ export function createGitGraphComponent(React) {
         return h('div', { className: 'dsh-git-center-msg' }, '暂无匹配的 Git 提交记录');
       }
 
-      const canvasWidth = Math.max(1200, dagLayout.width + 120);
-      const canvasHeight = Math.max(800, dagLayout.height + 120);
+      const canvasWidth = Math.max(1200, dagLayout.width + 160);
+      const canvasHeight = Math.max(800, dagLayout.height + 160);
 
       return h('div', { className: 'dsh-git-dag-container' },
         // DAG Auxiliary Toolbar
@@ -1271,7 +1392,7 @@ export function createGitGraphComponent(React) {
               className: 'dsh-git-btn',
               onClick: () => setEdgeDirection(d => d === 'parent-to-child' ? 'child-to-parent' : 'parent-to-child'),
               title: '切换连线箭头指示方向'
-            }, edgeDirection === 'parent-to-child' ? '↗ 流向: 演进 (父→子)' : '↘ 流向: 引用 (子→父)')
+            }, edgeDirection === 'parent-to-child' ? '↗ 演进 (父→子)' : '↘ 追溯 (子→父)')
           ),
 
           h('div', { className: 'dsh-git-dag-toolbar-group' },
@@ -1290,12 +1411,17 @@ export function createGitGraphComponent(React) {
               onClick: () => setDagZoom(z => Math.min(2.5, +(z + 0.15).toFixed(2))),
               title: '放大'
             }, '+'),
-            h('button', { className: 'dsh-git-btn', onClick: handleResetDagView, title: '重置缩放和位置' }, '1:1'),
-            h('button', { className: 'dsh-git-btn', onClick: handleFitDagView, title: '适应视口大小' }, '适应')
+            h('button', { className: 'dsh-git-btn', onClick: handleResetDagView, title: '重置缩放和视口位置' }, '1:1'),
+            h('button', { className: 'dsh-git-btn', onClick: handleFitDagView, title: '适应视口大小' }, '适应'),
+            h('button', {
+              className: 'dsh-git-btn',
+              onClick: handleResetNodePositions,
+              title: '复位所有拖拽过的节点到初始整齐网格位置'
+            }, '🔄 复位排版')
           ),
 
           h('div', { className: 'dsh-git-dag-hint' },
-            `共 ${dagLayout.nodes.length} 个节点 · 拖拽平移 · 滚轮缩放 · 悬停高亮链路`
+            `共 ${dagLayout.nodes.length} 个节点 · 按住节点可自由拖动 · 拖拽空白平移画布 · 滚轮缩放`
           )
         ),
 
@@ -1304,9 +1430,6 @@ export function createGitGraphComponent(React) {
           ref: dagContainerRef,
           className: `dsh-git-dag-viewport ${isDragging ? 'dragging' : ''}`,
           onMouseDown: handleDagMouseDown,
-          onMouseMove: handleDagMouseMove,
-          onMouseUp: handleDagMouseUp,
-          onMouseLeave: handleDagMouseUp,
           onWheel: handleDagWheel
         },
           h('div', {
@@ -1317,7 +1440,7 @@ export function createGitGraphComponent(React) {
               height: canvasHeight
             }
           },
-            // SVG Directed Edges
+            // SVG Directed Edges (Smooth Bezier Splines)
             h('svg', {
               className: 'dsh-git-dag-edges',
               width: canvasWidth,
@@ -1355,19 +1478,21 @@ export function createGitGraphComponent(React) {
                 const isDimmed = relatedHashes && !isRelated;
 
                 return h('g', { key: edge.id },
+                  // Background knockout stroke
                   h('path', {
                     d: edge.pathD,
                     fill: 'none',
                     stroke: 'var(--dsh-base, #131418)',
-                    strokeWidth: isRelated ? 6 : 4.5,
+                    strokeWidth: isRelated ? 6.5 : 5,
                     strokeLinecap: 'round'
                   }),
+                  // Foreground colorful bezier curve
                   h('path', {
                     d: edge.pathD,
                     fill: 'none',
                     stroke: isRelated ? '#60a5fa' : edge.color,
                     strokeWidth: isRelated ? 3 : 2,
-                    opacity: isDimmed ? 0.2 : (isRelated ? 1 : 0.75),
+                    opacity: isDimmed ? 0.2 : (isRelated ? 1 : 0.8),
                     strokeDasharray: edge.isDashed ? '4,4' : (edge.isMerge ? '5,3' : 'none'),
                     strokeLinecap: 'round',
                     markerEnd: isRelated ? 'url(#dag-arrow-active)' : 'url(#dag-arrow)'
@@ -1376,7 +1501,7 @@ export function createGitGraphComponent(React) {
               })
             ),
 
-            // HTML Node Cards
+            // HTML Node Cards (Draggable, Rich Details)
             dagLayout.nodes.map(node => {
               const commit = node.commit;
               const isSelected = selectedCommit?.hash === commit.hash;
@@ -1385,12 +1510,15 @@ export function createGitGraphComponent(React) {
               const isDimmed = relatedHashes && !relatedHashes.has(commit.hash);
               const isHead = commit.refs.some(r => r.isHead);
               const isMerge = commit.parents && commit.parents.length > 1;
+              const isDraggingNode = draggingNodeHash === commit.hash;
 
               let className = 'dsh-dag-node';
               if (isSelected) className += ' selected';
               if (isHovered) className += ' hovered';
               if (isRelated) className += ' related';
               if (isDimmed) className += ' dimmed';
+              if (isHead) className += ' is-head-node';
+              if (isDraggingNode) className += ' dragging';
               if (commit.isUncommitted) className += ' uncommitted-row';
 
               return h('div', {
@@ -1403,39 +1531,44 @@ export function createGitGraphComponent(React) {
                   width: node.width,
                   height: node.height,
                   borderLeftColor: node.color,
-                  borderLeftWidth: 3,
+                  borderLeftWidth: 4,
                   borderStyle: commit.isUncommitted ? 'dashed' : 'solid'
                 },
-                onClick: () => handleSelectCommit(commit),
+                onMouseDown: (e) => handleNodeMouseDown(e, node),
                 onContextMenu: (e) => handleContextMenu(e, commit),
                 onMouseEnter: () => setHoveredHash(commit.hash),
                 onMouseLeave: () => setHoveredHash(null)
               },
-                // Vertex Dot
-                h('div', {
-                  className: 'dsh-dag-vertex-dot',
-                  style: {
-                    background: node.color,
-                    left: dagDirection === 'vertical' ? '50%' : '-4px',
-                    top: dagDirection === 'vertical' ? '-4px' : '50%',
-                    transform: dagDirection === 'vertical' ? 'translateX(-50%)' : 'translateY(-50%)'
-                  }
-                }),
+                // Ports on 4 edges for clean topology visual
+                h('div', { className: 'dsh-dag-port port-top', style: { borderColor: node.color } }),
+                h('div', { className: 'dsh-dag-port port-bottom', style: { borderColor: node.color } }),
+                h('div', { className: 'dsh-dag-port port-left', style: { borderColor: node.color } }),
+                h('div', { className: 'dsh-dag-port port-right', style: { borderColor: node.color } }),
 
-                // Header
+                // Node Header (Handle, Hash, Copy, Author, Date)
                 h('div', { className: 'dsh-dag-node-header' },
-                  h('span', { className: 'dsh-dag-node-hash' }, commit.shortHash),
-                  h('span', { className: 'dsh-dag-node-author', title: `${commit.author} <${commit.authorEmail}>` },
-                    h('span', { className: 'dsh-git-author-avatar' }, (commit.author || '?')[0].toUpperCase()),
-                    commit.author
+                  h('div', { className: 'dsh-dag-header-left' },
+                    h('span', { className: 'dsh-dag-drag-handle', title: '按住鼠标左键可拖动此节点' }, '⋮⋮'),
+                    h('span', { className: 'dsh-dag-node-hash' }, commit.shortHash),
+                    !commit.isUncommitted && h('button', {
+                      className: 'dsh-dag-copy-icon-btn',
+                      title: '复制 Commit SHA',
+                      onClick: (e) => handleCopyHash(e, commit.hash, 'SHA')
+                    }, '📋')
                   ),
-                  h('span', { className: 'dsh-dag-node-date' }, formatRelativeDate(commit.date))
+                  h('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                    h('span', { className: 'dsh-dag-node-author', title: `${commit.author} <${commit.authorEmail || ''}>` },
+                      h('span', { className: 'dsh-git-author-avatar' }, (commit.author || '?')[0].toUpperCase()),
+                      commit.author
+                    ),
+                    h('span', { className: 'dsh-dag-node-date', title: commit.date }, formatRelativeDate(commit.date))
+                  )
                 ),
 
-                // Subject Title
+                // Commit Subject
                 h('div', { className: 'dsh-dag-node-subject', title: commit.subject }, commit.subject),
 
-                // Footer Badges
+                // Footer (Badges, Head, Merge, Branches, Tags)
                 h('div', { className: 'dsh-dag-node-footer' },
                   isHead && h('span', { className: 'dsh-git-badge dsh-badge-head' }, 'HEAD'),
                   isMerge && h('span', { className: 'dsh-git-badge dsh-badge-merge' }, `Merge (${commit.parents.length})`),
