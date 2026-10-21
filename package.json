@@ -1,5 +1,5 @@
 {
-  "name": "dsh-plugin-git-graph",
+  "name": "ds-gitui",
   "version": "1.0.0",
   "description": "DeepSeek Harness 可视化 Git 分支图谱与版本控制插件 (Visual Git Graph & Repository Operations for DeepSeek Harness)",
   "type": "module",

@@ -1541,6 +1541,6 @@ export function createGitGraphArtwork(React) {
 export function createGitGraphTitle(React) {
   const h = React.createElement;
   return function GitGraphTitle() {
-    return h('span', null, 'Git Graph');
+    return h('span', null, 'ds-gitui');
   };
 }

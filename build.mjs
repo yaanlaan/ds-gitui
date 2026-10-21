@@ -12,10 +12,9 @@ const cleanedViewContent = viewContent
   .replaceAll('export function ', 'function ')
   .replaceAll('export const ', 'const ');
 
-const clientBundle = `// DeepSeek Harness Git Graph Plugin - Client Bundle
-window.__ModuleLoader__.load({
-  id: "dsh-plugin-git-graph",
-  factory: (require) => {
+const clientBundle = `// DeepSeek Harness ds-gitui Plugin - Client Bundle
+(function() {
+  function factory(require) {
     var module = { exports: {} };
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
@@ -29,7 +28,7 @@ window.__ModuleLoader__.load({
 
     function installUiStyles() {
       if (typeof document === 'undefined') return;
-      const STYLE_ID = 'dsh-git-graph-styles';
+      const STYLE_ID = 'ds-gitui-styles';
       let el = document.getElementById(STYLE_ID);
       if (!el) {
         el = document.createElement('style');
@@ -48,8 +47,8 @@ window.__ModuleLoader__.load({
     const GitGraphArtwork = createGitGraphArtwork(React);
     const GitGraphTitle = createGitGraphTitle(React);
 
-    const PLUGIN_ID = "dsh-plugin-git-graph";
-    const TAB_KIND = "git-graph";
+    const PLUGIN_ID = "ds-gitui";
+    const TAB_KIND = "ds-gitui";
 
     // ==========================================
     // 3. 插件依赖注入与生命周期
@@ -64,40 +63,41 @@ window.__ModuleLoader__.load({
       installUiStyles();
 
       // 1. 注册右侧侧边栏 Tab 定义以及 "开始 (Guide)" 入口项
-      ctx.effect(() => ctx.sidebarRightTabs.register({
-        id: PLUGIN_ID,
-        kind: TAB_KIND,
-        title: () => "Git Graph",
-        guide: [{
-          id: "open",
-          order: 35,
-          title: () => "Git Graph",
-          description: () => "在侧边栏可视化浏览与操作 Git 分支与提交图谱",
-          icon: GitGraphArtwork
-        }]
-      }), "dsh-plugin-git-graph: sidebar tab");
+      try {
+        if (!ctx.sidebarRightTabs?.ids?.has(PLUGIN_ID)) {
+          ctx.effect(() => ctx.sidebarRightTabs.register({
+            id: PLUGIN_ID,
+            kind: TAB_KIND,
+            title: () => "ds-gitui",
+            guide: [{
+              id: "open",
+              order: 35,
+              title: () => "ds-gitui",
+              description: () => "在侧边栏可视化浏览与操作 Git 分支与提交图谱",
+              icon: GitGraphArtwork
+            }]
+          }), "ds-gitui: sidebar tab");
+        }
+      } catch (err) {
+        console.warn('[ds-gitui] sidebarRightTabs.register:', err);
+      }
 
-      // 2. 注册侧边栏 Tab 内容主体 (同时以 PLUGIN_ID 和 TAB_KIND 注册保障分发)
-      ctx.effect(() => ctx.slots.inject("sidebar.right.pane.tab", () => ctx.slots.register({
-        name: "sidebar.right.pane.tab",
-        key: PLUGIN_ID
-      }, GitGraphView)), "dsh-plugin-git-graph: tab body id");
+      // 2. 注册侧边栏 Tab 内容主体与标题 (支持 ds-gitui 及历史 key 兼容)
+      ["ds-gitui", "git-graph", "dsh-plugin-git-graph"].forEach(key => {
+        try {
+          ctx.effect(() => ctx.slots.inject("sidebar.right.pane.tab", () => ctx.slots.register({
+            name: "sidebar.right.pane.tab",
+            key
+          }, GitGraphView)), "ds-gitui: tab body " + key);
 
-      ctx.effect(() => ctx.slots.inject("sidebar.right.pane.tab", () => ctx.slots.register({
-        name: "sidebar.right.pane.tab",
-        key: TAB_KIND
-      }, GitGraphView)), "dsh-plugin-git-graph: tab body kind");
-
-      // 3. 注册侧边栏 Tab 标题
-      ctx.effect(() => ctx.slots.inject("sidebar.right.pane.tab.title", () => ctx.slots.register({
-        name: "sidebar.right.pane.tab.title",
-        key: PLUGIN_ID
-      }, GitGraphTitle)), "dsh-plugin-git-graph: tab title id");
-
-      ctx.effect(() => ctx.slots.inject("sidebar.right.pane.tab.title", () => ctx.slots.register({
-        name: "sidebar.right.pane.tab.title",
-        key: TAB_KIND
-      }, GitGraphTitle)), "dsh-plugin-git-graph: tab title kind");
+          ctx.effect(() => ctx.slots.inject("sidebar.right.pane.tab.title", () => ctx.slots.register({
+            name: "sidebar.right.pane.tab.title",
+            key
+          }, GitGraphTitle)), "ds-gitui: tab title " + key);
+        } catch (err) {
+          console.warn('[ds-gitui] slots register:', err);
+        }
+      });
     }
 
     exports.apply = apply;
@@ -108,7 +108,33 @@ window.__ModuleLoader__.load({
 
     return module.exports;
   }
-});
+
+  // Register in ModuleLoader with idempotent guards
+  if (!window.__ds_gitui_registered__) {
+    window.__ds_gitui_registered__ = true;
+    try {
+      window.__ModuleLoader__.load({ id: "ds-gitui", factory });
+    } catch (e) {
+      console.warn('[ds-gitui] ModuleLoader load ds-gitui:', e);
+    }
+  }
+
+  if (!window.__dsh_plugin_git_graph_registered__) {
+    window.__dsh_plugin_git_graph_registered__ = true;
+    try {
+      window.__ModuleLoader__.load({
+        id: "dsh-plugin-git-graph",
+        factory: function() {
+          return {
+            apply: function() {}
+          };
+        }
+      });
+    } catch (e) {
+      console.warn('[ds-gitui] ModuleLoader load dsh-plugin-git-graph:', e);
+    }
+  }
+})();
 `;
 
 if (!fs.existsSync('lib')) {

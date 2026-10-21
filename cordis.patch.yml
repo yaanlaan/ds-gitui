@@ -1,3 +1,3 @@
 - insert:
-    - id: dsh-plugin-git-graph
-      name: dsh-plugin-git-graph
+    - id: ds-gitui
+      name: ds-gitui
