@@ -3,20 +3,16 @@
  * Uses React.createElement (h) for zero-dependency native execution in Cordis/Electron/Browser
  */
 
-const COLORS = [
-  '#eab308', // yellow / gold (VSCode primary trunk)
-  '#38bdf8', // light blue / cyan
-  '#34d399', // emerald / green
-  '#f472b6', // pink
-  '#a78bfa', // purple
-  '#fb923c', // orange
-  '#22d3ee', // teal
-  '#f87171'  // coral red
-];
+let h = (typeof window !== 'undefined' && window.React) ? window.React.createElement : null;
+
+function getH() {
+  return h || (typeof window !== 'undefined' && window.React?.createElement);
+}
 
 function formatRelativeDate(isoStr) {
   if (!isoStr) return '';
   const date = new Date(isoStr);
+  if (isNaN(date.getTime())) return String(isoStr);
   const now = new Date();
   const diffSec = Math.floor((now.getTime() - date.getTime()) / 1000);
   if (diffSec < 60) return '刚刚';
@@ -26,7 +22,197 @@ function formatRelativeDate(isoStr) {
   return date.toLocaleDateString();
 }
 
-function computeGraphLayout(commits) {
+const COLORS = [
+  '#10b981', // emerald / green (primary trunk)
+  '#a855f7', // purple / violet
+  '#f59e0b', // amber / orange
+  '#06b6d4', // cyan / teal
+  '#ec4899', // pink / magenta
+  '#3b82f6', // blue
+  '#14b8a6', // mint
+  '#f97316', // coral orange
+  '#6366f1', // indigo
+  '#84cc16', // lime
+  '#d946ef', // fuchsia
+  '#eab308'  // yellow
+];
+
+const BRANCH_PRESET_COLORS = {
+  main: '#10b981',       // 翡翠绿 (主干)
+  master: '#10b981',     // 翡翠绿 (主干)
+  develop: '#38bdf8',    // 亮蓝
+  dev: '#38bdf8',
+  staging: '#f59e0b',
+  production: '#10b981'
+};
+
+const DISTINCT_PALETTE = [
+  '#10b981', '#a855f7', '#f59e0b', '#06b6d4',
+  '#ec4899', '#3b82f6', '#14b8a6', '#f97316',
+  '#6366f1', '#84cc16', '#d946ef', '#eab308'
+];
+
+function cleanBranchName(name) {
+  if (!name) return '';
+  return name
+    .replace(/^(origin|upstream|github|gitlab)\//, '')
+    .replace(/^tag:\s*/, '')
+    .replace(/^\*\s*/, '');
+}
+
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function getBranchColor(rawName) {
+  const name = cleanBranchName(rawName);
+  if (!name) return '#60a5fa';
+  const lower = name.toLowerCase();
+
+  if (BRANCH_PRESET_COLORS[lower]) {
+    return BRANCH_PRESET_COLORS[lower];
+  }
+  if (lower.startsWith('release') || lower.startsWith('v')) {
+    return '#f59e0b'; // 琥珀橙
+  }
+  if (lower.startsWith('hotfix') || lower.startsWith('bugfix') || lower.startsWith('fix')) {
+    return '#ef4444'; // 珊瑚红
+  }
+  if (lower.startsWith('feature/ui') || lower.startsWith('ui-') || lower.includes('ui')) {
+    return '#a855f7'; // 紫罗兰
+  }
+  if (lower.startsWith('feature/demo') || lower.includes('demo')) {
+    return '#ec4899'; // 洋红粉
+  }
+
+  const idx = hashString(name) % DISTINCT_PALETTE.length;
+  return DISTINCT_PALETTE[idx];
+}
+
+function analyzeCommitBranches(commits) {
+  if (!commits || commits.length === 0) {
+    return { commitBranchInfo: new Map(), allBranchNames: [] };
+  }
+
+  const commitMap = new Map();
+  commits.forEach(c => commitMap.set(c.hash, c));
+
+  const branchHeads = [];
+  commits.forEach(c => {
+    (c.refs || []).forEach(r => {
+      if (r.type === 'branch' || r.type === 'remote') {
+        const cleanName = cleanBranchName(r.name);
+        if (cleanName && !branchHeads.some(b => b.name === cleanName)) {
+          branchHeads.push({
+            name: cleanName,
+            hash: c.hash,
+            color: getBranchColor(cleanName)
+          });
+        }
+      }
+    });
+  });
+
+  const commitToBranches = new Map();
+  commits.forEach(c => commitToBranches.set(c.hash, new Set()));
+
+  branchHeads.forEach(bh => {
+    const queue = [bh.hash];
+    const visited = new Set();
+    while (queue.length > 0) {
+      const curHash = queue.shift();
+      if (!curHash || visited.has(curHash)) continue;
+      visited.add(curHash);
+
+      const branchSet = commitToBranches.get(curHash);
+      if (branchSet) branchSet.add(bh.name);
+
+      const curCommit = commitMap.get(curHash);
+      if (curCommit && curCommit.parents) {
+        for (const p of curCommit.parents) {
+          if (!visited.has(p)) queue.push(p);
+        }
+      }
+    }
+  });
+
+  const result = new Map();
+  commits.forEach(c => {
+    const branches = Array.from(commitToBranches.get(c.hash) || []);
+    let primary = branches[0] || '';
+    if (branches.includes('main')) {
+      primary = 'main';
+    } else if (branches.includes('master')) {
+      primary = 'master';
+    }
+    result.set(c.hash, {
+      branches,
+      primaryBranch: primary,
+      primaryColor: primary ? getBranchColor(primary) : '#94a3b8'
+    });
+  });
+
+  return { commitBranchInfo: result, allBranchNames: branchHeads.map(b => b.name) };
+}
+
+function renderBranchIcon() {
+  const _h = getH();
+  if (!_h) return null;
+  return _h('svg', {
+    width: 11,
+    height: 11,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2.2,
+    style: { marginRight: 2, flexShrink: 0 }
+  },
+    _h('line', { x1: 6, y1: 3, x2: 6, y2: 15 }),
+    _h('circle', { cx: 18, cy: 6, r: 3 }),
+    _h('circle', { cx: 6, cy: 18, r: 3 }),
+    _h('path', { d: 'M18 9a9 9 0 0 1-9 9' })
+  );
+}
+
+function renderCloudIcon() {
+  const _h = getH();
+  if (!_h) return null;
+  return _h('svg', {
+    width: 11,
+    height: 11,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2,
+    style: { marginRight: 2, flexShrink: 0 }
+  },
+    _h('path', { d: 'M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z' })
+  );
+}
+
+function renderTagIcon() {
+  const _h = getH();
+  if (!_h) return null;
+  return _h('svg', {
+    width: 11,
+    height: 11,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2.2,
+    style: { marginRight: 2, flexShrink: 0 }
+  },
+    _h('path', { d: 'M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z' }),
+    _h('line', { x1: 7, y1: 7, x2: 7.01, y2: 7 })
+  );
+}
+
+function computeGraphLayout(commits, branchAnalysis) {
   if (!commits || commits.length === 0) {
     return { rows: [], verticalLines: [], curves: [], maxLane: 0 };
   }
@@ -72,11 +258,18 @@ function computeGraphLayout(commits) {
       colorIdx = lanes[lane].colorIndex;
     }
 
+    const branchInfo = branchAnalysis?.commitBranchInfo?.get(commit.hash);
+    const commitColor = commit.isUncommitted
+      ? '#f59e0b'
+      : (branchInfo?.primaryColor || COLORS[colorIdx % COLORS.length]);
+
     rows.push({
       commit,
       lane,
-      color: COLORS[colorIdx % COLORS.length],
-      colorIndex: colorIdx
+      color: commitColor,
+      colorIndex: colorIdx,
+      primaryBranch: branchInfo?.primaryBranch || '',
+      branches: branchInfo?.branches || []
     });
 
     // Vacate current commit's slot in its lane
@@ -111,10 +304,13 @@ function computeGraphLayout(commits) {
 
         const parentRow = commitIndex.get(parentHash);
         if (parentRow !== undefined) {
+          const pBranchInfo = branchAnalysis?.commitBranchInfo?.get(parentHash);
+          const pCommitColor = pBranchInfo?.primaryColor || COLORS[pColorIdx % COLORS.length];
+
           // If fork from parent into new branch, use the branch color; if merge into parent, use parent's color
           const connectionColor = pIdx === 0
-            ? (lane !== pLane ? COLORS[colorIdx % COLORS.length] : COLORS[pColorIdx % COLORS.length])
-            : COLORS[pColorIdx % COLORS.length];
+            ? (lane !== pLane ? commitColor : pCommitColor)
+            : pCommitColor;
 
           rawConnections.push({
             fromRow: i,
@@ -207,6 +403,150 @@ function computeGraphLayout(commits) {
   return { rows, verticalLines, curves, maxLane };
 }
 
+function renderRefBadges({
+  commit,
+  branchAnalysis,
+  hoveredBranch,
+  setHoveredBranch,
+  handleCheckout,
+  showBranchIndicator = true
+}) {
+  const _h = getH();
+  if (!_h) return [];
+  const isHead = commit.isHead || commit.refs?.some(r => r.type === 'head');
+  const branchInfo = branchAnalysis?.commitBranchInfo?.get(commit.hash);
+  const elements = [];
+
+  // 1. HEAD 指针徽章
+  if (isHead) {
+    elements.push(
+      _h('span', {
+        key: 'badge-head',
+        className: 'dsh-git-badge dsh-badge-head',
+        title: '当前工作区检出的 HEAD 指针'
+      },
+        _h('span', { className: 'dsh-badge-dot' }),
+        'HEAD'
+      )
+    );
+  }
+
+  // 2. 明确的 refs (tag, remote, branch, uncommitted)
+  let hasExplicitBranchRef = false;
+  if (commit.refs && commit.refs.length > 0) {
+    commit.refs.forEach((ref, rIdx) => {
+      if (ref.type === 'head') return;
+
+      if (ref.type === 'tag') {
+        elements.push(
+          _h('span', {
+            key: `ref-tag-${ref.name}-${rIdx}`,
+            className: 'dsh-git-badge dsh-badge-tag',
+            title: `Git Tag 标签: ${ref.name}`
+          },
+            renderTagIcon(),
+            ref.name
+          )
+        );
+      } else if (ref.type === 'remote') {
+        hasExplicitBranchRef = true;
+        const cleanName = cleanBranchName(ref.name);
+        const branchColor = getBranchColor(cleanName);
+        const isHovered = hoveredBranch === cleanName;
+
+        elements.push(
+          _h('span', {
+            key: `ref-remote-${ref.name}-${rIdx}`,
+            className: 'dsh-git-badge dsh-badge-remote',
+            style: {
+              color: branchColor,
+              borderColor: isHovered ? branchColor : `${branchColor}88`,
+              backgroundColor: isHovered ? `${branchColor}33` : `${branchColor}14`,
+              boxShadow: isHovered ? `0 0 8px ${branchColor}66` : 'none'
+            },
+            title: `远程分支: ${ref.name} (鼠标悬停高亮追踪)`,
+            onMouseEnter: () => setHoveredBranch && setHoveredBranch(cleanName),
+            onMouseLeave: () => setHoveredBranch && setHoveredBranch(null)
+          },
+            renderCloudIcon(),
+            _h('span', { style: { opacity: 0.6, marginRight: 1 } }, 'origin/'),
+            cleanName
+          )
+        );
+      } else if (ref.type === 'branch') {
+        hasExplicitBranchRef = true;
+        const cleanName = cleanBranchName(ref.name);
+        const branchColor = getBranchColor(cleanName);
+        const isHovered = hoveredBranch === cleanName;
+
+        elements.push(
+          _h('span', {
+            key: `ref-branch-${ref.name}-${rIdx}`,
+            className: 'dsh-git-badge dsh-badge-branch',
+            style: {
+              color: branchColor,
+              borderColor: isHovered ? branchColor : `${branchColor}99`,
+              backgroundColor: isHovered ? `${branchColor}44` : `${branchColor}24`,
+              boxShadow: isHovered ? `0 0 8px ${branchColor}77` : 'none'
+            },
+            title: `本地分支: ${ref.name} (双击切换检出, 鼠标悬停高亮追踪)`,
+            onMouseEnter: () => setHoveredBranch && setHoveredBranch(cleanName),
+            onMouseLeave: () => setHoveredBranch && setHoveredBranch(null),
+            onDoubleClick: (e) => {
+              e.stopPropagation();
+              handleCheckout && handleCheckout(ref.name);
+            }
+          },
+            renderBranchIcon(),
+            ref.name
+          )
+        );
+      } else if (ref.type === 'uncommitted') {
+        elements.push(
+          _h('span', {
+            key: 'ref-uncommitted',
+            className: 'dsh-git-badge dsh-badge-uncommitted',
+            title: '当前工作区未提交修改'
+          },
+            '⚡ Worktree'
+          )
+        );
+      }
+    });
+  }
+
+  // 3. 如果当前提交没有直接的分支标签，显示其所属主分支胶囊 (Branch Ownership Indicator)
+  if (showBranchIndicator && !hasExplicitBranchRef && !commit.isUncommitted && branchInfo?.primaryBranch) {
+    const primary = branchInfo.primaryBranch;
+    const color = branchInfo.primaryColor || getBranchColor(primary);
+    const isHovered = hoveredBranch === primary;
+
+    elements.push(
+      _h('span', {
+        key: `branch-indicator-${commit.hash}`,
+        className: 'dsh-git-branch-indicator',
+        style: {
+          color: color,
+          backgroundColor: isHovered ? `${color}35` : `${color}18`,
+          border: `1px solid ${isHovered ? color : color + '55'}`,
+          boxShadow: isHovered ? `0 0 6px ${color}55` : 'none'
+        },
+        title: `归属主分支: ${primary} (悬停高亮整条分支)`,
+        onMouseEnter: () => setHoveredBranch && setHoveredBranch(primary),
+        onMouseLeave: () => setHoveredBranch && setHoveredBranch(null)
+      },
+        _h('span', {
+          className: 'dsh-branch-indicator-dot',
+          style: { backgroundColor: color }
+        }),
+        primary
+      )
+    );
+  }
+
+  return elements;
+}
+
 function getActiveSessionCwd(sessionId) {
   if (typeof document === 'undefined') return '';
   try {
@@ -237,7 +577,7 @@ function getActiveSessionCwd(sessionId) {
 }
 
 export function createGitGraphComponent(React) {
-  const h = React.createElement;
+  h = React.createElement;
   const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
   return function GitGraphView(props) {
@@ -270,6 +610,7 @@ export function createGitGraphComponent(React) {
     const [isDragging, setIsDragging] = useState(false);
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
     const [hoveredHash, setHoveredHash] = useState(null);
+    const [hoveredBranch, setHoveredBranch] = useState(null);
     const [edgeDirection, setEdgeDirection] = useState('parent-to-child'); // 'parent-to-child' | 'child-to-parent'
     const [nodePositions, setNodePositions] = useState({}); // { [hash]: { x, y } }
     const [draggingNodeHash, setDraggingNodeHash] = useState(null);
@@ -750,6 +1091,10 @@ export function createGitGraphComponent(React) {
       }
     };
 
+    const branchAnalysis = useMemo(() => {
+      return analyzeCommitBranches(commits);
+    }, [commits]);
+
     const filteredCommits = useMemo(() => {
       if (!searchQuery.trim()) return commits;
       const q = searchQuery.toLowerCase();
@@ -761,7 +1106,9 @@ export function createGitGraphComponent(React) {
       );
     }, [commits, searchQuery]);
 
-    const graphData = useMemo(() => computeGraphLayout(filteredCommits), [filteredCommits]);
+    const graphData = useMemo(() => {
+      return computeGraphLayout(filteredCommits, branchAnalysis);
+    }, [filteredCommits, branchAnalysis]);
 
     const handleContextMenu = (e, commit) => {
       e.preventDefault();
@@ -1265,8 +1612,12 @@ export function createGitGraphComponent(React) {
                   const isMerge = commit.parents && commit.parents.length > 1;
                   const isSelected = selectedCommit?.hash === commit.hash;
                   const isUncommitted = commit.isUncommitted;
+                  const isDimmed = hoveredBranch && (!row.branches || !row.branches.includes(hoveredBranch));
 
-                  return h('g', { key: `dot-${commit.hash}` },
+                  return h('g', {
+                    key: `dot-${commit.hash}`,
+                    style: { opacity: isDimmed ? 0.25 : 1, transition: 'opacity 0.15s ease' }
+                  },
                     h('circle', {
                       cx: pt.x,
                       cy: pt.y,
@@ -1298,10 +1649,12 @@ export function createGitGraphComponent(React) {
                 const commit = row.commit;
                 const isSelected = selectedCommit?.hash === commit.hash;
                 const isHead = commit.refs.some(r => r.isHead);
+                const isDimmed = hoveredBranch && (!row.branches || !row.branches.includes(hoveredBranch));
+                const isHighlighted = hoveredBranch && (row.branches && row.branches.includes(hoveredBranch));
 
                 return h('div', {
                   key: commit.hash,
-                  className: `dsh-git-commit-row ${isSelected ? 'selected' : ''} ${commit.isUncommitted ? 'uncommitted-row' : ''}`,
+                  className: `dsh-git-commit-row ${isSelected ? 'selected' : ''} ${commit.isUncommitted ? 'uncommitted-row' : ''} ${isDimmed ? 'dimmed' : ''} ${isHighlighted ? 'highlighted-branch' : ''}`,
                   onClick: () => handleSelectCommit(commit),
                   onContextMenu: (e) => handleContextMenu(e, commit)
                 },
@@ -1313,20 +1666,14 @@ export function createGitGraphComponent(React) {
 
                   // Description / Message & Badges
                   h('div', { className: 'dsh-git-col-desc', title: `${commit.hash} - ${commit.subject}` },
-                    isHead && h('span', { className: 'dsh-git-badge dsh-badge-head' }, 'HEAD'),
-                    commit.refs.map(ref =>
-                      h('span', {
-                        key: ref.name,
-                        className: `dsh-git-badge ${ref.isHead ? 'dsh-badge-head' : ref.isTag ? 'dsh-badge-tag' : ref.isRemote ? 'dsh-badge-remote' : (ref.isUncommitted ? 'dsh-badge-uncommitted' : 'dsh-badge-branch')}`,
-                        title: ref.name,
-                        onDoubleClick: (e) => {
-                          e.stopPropagation();
-                          if (!ref.isTag && !ref.isHead && !ref.isUncommitted) {
-                            handleCheckout(ref.name);
-                          }
-                        }
-                      }, ref.name)
-                    ),
+                    renderRefBadges({
+                      commit,
+                      branchAnalysis,
+                      hoveredBranch,
+                      setHoveredBranch,
+                      handleCheckout,
+                      showBranchIndicator: true
+                    }),
                     h('span', {
                       style: {
                         fontWeight: isHead ? 600 : 400,
@@ -1507,7 +1854,7 @@ export function createGitGraphComponent(React) {
               const isSelected = selectedCommit?.hash === commit.hash;
               const isHovered = hoveredHash === commit.hash;
               const isRelated = relatedHashes && relatedHashes.has(commit.hash) && !isHovered;
-              const isDimmed = relatedHashes && !relatedHashes.has(commit.hash);
+              const isDimmed = (relatedHashes && !relatedHashes.has(commit.hash)) || (hoveredBranch && (!commit.branches || !commit.branches.includes(hoveredBranch)));
               const isHead = commit.refs.some(r => r.isHead);
               const isMerge = commit.parents && commit.parents.length > 1;
               const isDraggingNode = draggingNodeHash === commit.hash;
@@ -1570,19 +1917,15 @@ export function createGitGraphComponent(React) {
 
                 // Footer (Badges, Head, Merge, Branches, Tags)
                 h('div', { className: 'dsh-dag-node-footer' },
-                  isHead && h('span', { className: 'dsh-git-badge dsh-badge-head' }, 'HEAD'),
                   isMerge && h('span', { className: 'dsh-git-badge dsh-badge-merge' }, `Merge (${commit.parents.length})`),
-                  commit.refs.map(ref =>
-                    h('span', {
-                      key: ref.name,
-                      className: `dsh-git-badge ${ref.isHead ? 'dsh-badge-head' : ref.isTag ? 'dsh-badge-tag' : ref.isRemote ? 'dsh-badge-remote' : (ref.isUncommitted ? 'dsh-badge-uncommitted' : 'dsh-badge-branch')}`,
-                      title: ref.name,
-                      onDoubleClick: (e) => {
-                        e.stopPropagation();
-                        if (!ref.isTag && !ref.isHead && !ref.isUncommitted) handleCheckout(ref.name);
-                      }
-                    }, ref.name)
-                  )
+                  renderRefBadges({
+                    commit,
+                    branchAnalysis,
+                    hoveredBranch,
+                    setHoveredBranch,
+                    handleCheckout,
+                    showBranchIndicator: true
+                  })
                 )
               );
             })
@@ -1632,16 +1975,29 @@ export function createGitGraphComponent(React) {
           h('div', { className: 'dsh-git-branch-grid' },
             localBranches.map(b => {
               const latestCommit = commits.find(c => c.refs.some(r => r.name === b.name) || (b.isHead && c.refs.some(r => r.isHead)));
+              const bColor = getBranchColor(b.name);
               return h('div', {
                 key: b.name,
-                className: `dsh-git-branch-card ${b.isHead ? 'is-head' : ''}`
+                className: `dsh-git-branch-card ${b.isHead ? 'is-head' : ''}`,
+                style: {
+                  borderLeftColor: bColor,
+                  borderLeftWidth: 4
+                }
               },
                 h('div', { className: 'dsh-git-branch-card-header' },
                   h('span', { className: 'dsh-git-branch-card-name', title: b.name },
-                    h('span', { className: `dsh-git-badge ${b.isHead ? 'dsh-badge-head' : 'dsh-badge-branch'}` },
-                      b.isHead ? '* HEAD' : 'branch'
+                    h('span', {
+                      className: `dsh-git-badge ${b.isHead ? 'dsh-badge-head' : 'dsh-badge-branch'}`,
+                      style: b.isHead ? {} : {
+                        color: bColor,
+                        borderColor: `${bColor}99`,
+                        backgroundColor: `${bColor}24`
+                      }
+                    },
+                      b.isHead ? h('span', { className: 'dsh-badge-dot' }) : renderBranchIcon(),
+                      b.isHead ? 'HEAD' : 'branch'
                     ),
-                    b.name
+                    h('span', { style: { fontWeight: 600, color: bColor } }, b.name)
                   ),
                   latestCommit && h('span', { className: 'dsh-dag-node-hash' }, latestCommit.shortHash)
                 ),
@@ -1936,6 +2292,22 @@ export function createGitGraphComponent(React) {
 
       // 3. Main Area: Table View | DAG Topology View | Branches View
       h('div', { className: 'dsh-git-main-area' },
+        selectedBranch !== 'ALL' && h('div', { className: 'dsh-git-filter-banner' },
+          h('div', { className: 'dsh-git-filter-banner-text' },
+            renderBranchIcon(),
+            '当前分支视图: ',
+            h('strong', { style: { color: getBranchColor(selectedBranch) } }, selectedBranch),
+            ` (${filteredCommits.length} 个提交)`
+          ),
+          h('button', {
+            className: 'dsh-git-btn',
+            style: { padding: '1px 8px', fontSize: 11 },
+            onClick: () => {
+              setSelectedBranch('ALL');
+              loadRepoData('ALL');
+            }
+          }, '显示所有分支')
+        ),
         viewMode === 'table' && renderTableView(),
         viewMode === 'dag' && renderDagView(),
         viewMode === 'branches' && renderBranchesView(),

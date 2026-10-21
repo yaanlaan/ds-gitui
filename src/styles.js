@@ -99,39 +99,67 @@ export const GIT_GRAPH_STYLES = `
 .dsh-git-badge {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 0 6px;
-  height: 18px;
-  line-height: 18px;
+  gap: 4px;
+  padding: 0 7px;
+  height: 19px;
+  line-height: 19px;
   font-size: 11px;
   font-weight: 500;
   border-radius: 9px;
   white-space: nowrap;
+  user-select: none;
+  transition: all 0.15s ease;
+  box-sizing: border-box;
+}
+
+.dsh-git-badge:hover {
+  filter: brightness(1.15);
+  transform: translateY(-0.5px);
 }
 
 .dsh-badge-branch {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(59, 130, 246, 0.18);
   color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.4);
-}
-
-.dsh-badge-head {
-  background: rgba(59, 130, 246, 0.25);
-  color: #93c5fd;
-  border: 1px solid #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.5);
   font-weight: 600;
 }
 
+.dsh-badge-head {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.35), rgba(37, 99, 235, 0.25));
+  color: #bfdbfe;
+  border: 1.5px solid #60a5fa;
+  font-weight: 700;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
+}
+
+.dsh-badge-head .dsh-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #60a5fa;
+  box-shadow: 0 0 6px #60a5fa;
+  display: inline-block;
+  animation: dshPulse 2s infinite ease-in-out;
+}
+
+@keyframes dshPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
 .dsh-badge-remote {
-  background: rgba(147, 51, 234, 0.15);
+  background: rgba(147, 51, 234, 0.12);
   color: #c084fc;
-  border: 1px solid rgba(147, 51, 234, 0.4);
+  border: 1px dashed rgba(147, 51, 234, 0.5);
 }
 
 .dsh-badge-tag {
-  background: rgba(245, 158, 11, 0.15);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(217, 119, 6, 0.18));
   color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.4);
+  border: 1px solid rgba(245, 158, 11, 0.7);
+  font-weight: 600;
+  border-radius: 4px;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.2);
 }
 
 .dsh-badge-uncommitted {
@@ -139,6 +167,59 @@ export const GIT_GRAPH_STYLES = `
   color: #f87171;
   border: 1px dashed rgba(239, 68, 68, 0.5);
   font-weight: 600;
+}
+
+/* Branch ownership indicator on commit row */
+.dsh-git-branch-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  height: 16px;
+  line-height: 16px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 4px;
+  white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.dsh-git-branch-indicator:hover {
+  filter: brightness(1.25);
+  transform: translateY(-0.5px);
+}
+
+.dsh-branch-indicator-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 4px currentColor;
+}
+
+/* Branch filter banner */
+.dsh-git-filter-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  background: rgba(59, 130, 246, 0.1);
+  border-bottom: 1px solid rgba(59, 130, 246, 0.25);
+  font-size: 11.5px;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.dsh-git-filter-banner-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Working tree quick card */
@@ -206,6 +287,15 @@ export const GIT_GRAPH_STYLES = `
 
 .dsh-git-commit-row.uncommitted-row {
   background-color: rgba(245, 158, 11, 0.05);
+}
+
+.dsh-git-commit-row.dimmed {
+  opacity: 0.28 !important;
+  filter: grayscale(45%);
+}
+
+.dsh-git-commit-row.highlighted-branch {
+  background-color: rgba(255, 255, 255, 0.06) !important;
 }
 
 .dsh-git-col-graph {
