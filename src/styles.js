@@ -492,4 +492,22 @@ export const GIT_GRAPH_STYLES = `
 @keyframes dshSpin {
   to { transform: rotate(360deg); }
 }
+
+.dsh-git-action-tag {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--dsh-fg-secondary, #cbd5e1);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.dsh-git-action-tag:hover {
+  background: var(--dsh-accent, #3b82f6);
+  color: #fff;
+  border-color: var(--dsh-accent, #3b82f6);
+}
 `;
